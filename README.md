@@ -32,7 +32,12 @@ pnpm install
 - Copy `.env.example` files in `apps/web` and `apps/api`
 - Configure Clerk, Convex, and API URLs
 
-3. Start development servers:
+3. Install Python dependencies:
+```bash
+cd apps/api && pip3 install -r requirements.txt
+```
+
+4. Start development servers:
 ```bash
 pnpm dev
 ```
