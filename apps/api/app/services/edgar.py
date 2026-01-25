@@ -127,9 +127,13 @@ class EdgarService:
             
             latest_period_col = income_stmt.columns[0]
             
-            # Log available columns for debugging
-            logger.debug(f"Available income statement columns: {list(income_stmt.columns)}")
-            logger.debug(f"Using latest period column: {latest_period_col}")
+            # Log DataFrame structure for debugging
+            logger.info(f"Income statement shape: {income_stmt.shape}")
+            logger.info(f"Income statement index type: {type(income_stmt.index)}")
+            logger.info(f"Income statement index dtype: {income_stmt.index.dtype}")
+            logger.info(f"Income statement columns: {list(income_stmt.columns)}")
+            logger.info(f"Income statement index sample (first 5): {list(income_stmt.index[:5])}")
+            logger.info(f"Using latest period column: {latest_period_col}")
 
             # Helper function to safely get value from DataFrame
             def get_value(df: pd.DataFrame, search_terms: list) -> Optional[float]:
@@ -137,25 +141,62 @@ class EdgarService:
                 if df is None or df.empty:
                     return None
                 
+                # Check if index is string type for string operations
+                index_is_string = False
+                if len(df.index) > 0:
+                    try:
+                        first_idx = df.index[0]
+                        index_is_string = isinstance(first_idx, str) or (hasattr(df.index, 'dtype') and df.index.dtype == 'object')
+                    except:
+                        pass
+                
                 for term in search_terms:
-                    # Try exact match first
-                    if term in df.index:
-                        value = df.loc[term, latest_period_col]
-                        if pd.notna(value):
-                            try:
-                                return float(value)
-                            except (ValueError, TypeError):
-                                pass
+                    # Try exact match first (works for both string and numeric indices)
+                    try:
+                        if term in df.index:
+                            value = df.loc[term, latest_period_col]
+                            if pd.notna(value):
+                                try:
+                                    return float(value)
+                                except (ValueError, TypeError):
+                                    pass
+                    except (KeyError, TypeError):
+                        pass
                     
-                    # Try case-insensitive partial match
-                    matching_rows = df.index[df.index.str.contains(term, case=False, na=False)]
-                    if len(matching_rows) > 0:
-                        value = df.loc[matching_rows[0], latest_period_col]
-                        if pd.notna(value):
-                            try:
-                                return float(value)
-                            except (ValueError, TypeError):
-                                pass
+                    # Try case-insensitive partial match (only if index is string)
+                    if index_is_string:
+                        try:
+                            # Convert index to string for comparison
+                            str_index = df.index.astype(str)
+                            matching_rows = df.index[str_index.str.contains(term, case=False, na=False)]
+                            if len(matching_rows) > 0:
+                                value = df.loc[matching_rows[0], latest_period_col]
+                                if pd.notna(value):
+                                    try:
+                                        return float(value)
+                                    except (ValueError, TypeError):
+                                        pass
+                        except (AttributeError, TypeError, ValueError) as e:
+                            logger.debug(f"String search failed for {term}: {e}")
+                            pass
+                    
+                    # If index is numeric, search in all string representations
+                    if not index_is_string:
+                        try:
+                            # Convert all index values to string and search
+                            for idx in df.index:
+                                idx_str = str(idx).lower()
+                                if term.lower() in idx_str:
+                                    value = df.loc[idx, latest_period_col]
+                                    if pd.notna(value):
+                                        try:
+                                            return float(value)
+                                        except (ValueError, TypeError):
+                                            pass
+                        except Exception as e:
+                            logger.debug(f"Index search failed for {term}: {e}")
+                            pass
+                
                 return None
 
             # Extract financial metrics
