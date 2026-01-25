@@ -29,24 +29,86 @@ class EdgarService:
     def get_latest_quarter_financials(company: Company) -> Optional[Dict[str, Any]]:
         """Get the latest quarter's financial data."""
         try:
-            # Get quarterly financials from the latest 10-Q
-            financials = company.get_quarterly_financials()
+            # Try to get quarterly financials from the latest 10-Q
+            # First, try using the financials property directly
+            financials = None
+            
+            # Try quarterly first
+            try:
+                quarterly = company.get_quarterly_financials()
+                if quarterly:
+                    financials = quarterly
+            except:
+                pass
+            
+            # Fallback to annual financials
+            if not financials:
+                try:
+                    financials = company.get_financials()
+                except:
+                    pass
+            
+            # If still no financials, try the property directly
+            if not financials:
+                try:
+                    financials = company.financials
+                except:
+                    pass
             
             if not financials:
-                # Fallback to annual financials if no quarterly available
-                financials = company.get_financials()
-                if not financials:
-                    return None
+                logger.warning("Could not retrieve financials from any source")
+                return None
 
-            # Financials object has income, balance_sheet, and cash_flow as DataFrames
-            income_stmt = financials.income
-            balance_sheet = financials.balance_sheet
+            # Check what attributes/methods are available
+            logger.info(f"Financials object type: {type(financials)}")
+            logger.info(f"Financials object has 'income': {hasattr(financials, 'income')}")
+            logger.info(f"Financials object has 'income_statement': {hasattr(financials, 'income_statement')}")
+            logger.info(f"Financials object has 'balance_sheet': {hasattr(financials, 'balance_sheet')}")
+            # Log all attributes that might be relevant
+            attrs = [attr for attr in dir(financials) if not attr.startswith('_') and ('income' in attr.lower() or 'balance' in attr.lower() or 'cash' in attr.lower())]
+            logger.info(f"Relevant Financials attributes: {attrs}")
+            
+            # Try to access income statement - could be property or method
+            income_stmt = None
+            balance_sheet = None
+            
+            # income_statement is a method, not a property
+            if hasattr(financials, 'income_statement'):
+                income_stmt_attr = getattr(financials, 'income_statement')
+                if callable(income_stmt_attr):
+                    income_stmt = income_stmt_attr()
+                else:
+                    income_stmt = income_stmt_attr
+            elif hasattr(financials, 'income'):
+                income_attr = getattr(financials, 'income')
+                if callable(income_attr):
+                    income_stmt = income_attr()
+                else:
+                    income_stmt = income_attr
+            
+            # balance_sheet might also be a method
+            if hasattr(financials, 'balance_sheet'):
+                balance_sheet_attr = getattr(financials, 'balance_sheet')
+                if callable(balance_sheet_attr):
+                    balance_sheet = balance_sheet_attr()
+                else:
+                    balance_sheet = balance_sheet_attr
             
             if income_stmt is None or balance_sheet is None:
+                logger.error(f"Could not access income statement or balance sheet. Income: {income_stmt is not None}, Balance: {balance_sheet is not None}")
+                return None
+
+            # Ensure they're DataFrames
+            if not isinstance(income_stmt, pd.DataFrame):
+                logger.error(f"Income statement is not a DataFrame: {type(income_stmt)}")
+                return None
+            if not isinstance(balance_sheet, pd.DataFrame):
+                logger.error(f"Balance sheet is not a DataFrame: {type(balance_sheet)}")
                 return None
 
             # Get the latest period (first column in DataFrame)
             if income_stmt.empty or balance_sheet.empty:
+                logger.warning("Income statement or balance sheet is empty")
                 return None
 
             # Get the first column which should be the latest period
