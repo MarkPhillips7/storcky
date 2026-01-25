@@ -98,6 +98,14 @@ class EdgarService:
                 logger.error(f"Could not access income statement or balance sheet. Income: {income_stmt is not None}, Balance: {balance_sheet is not None}")
                 return None
 
+            # Convert Statement objects to DataFrames if needed
+            if hasattr(income_stmt, 'to_dataframe'):
+                logger.info("Converting income statement Statement to DataFrame")
+                income_stmt = income_stmt.to_dataframe()
+            if hasattr(balance_sheet, 'to_dataframe'):
+                logger.info("Converting balance sheet Statement to DataFrame")
+                balance_sheet = balance_sheet.to_dataframe()
+
             # Ensure they're DataFrames
             if not isinstance(income_stmt, pd.DataFrame):
                 logger.error(f"Income statement is not a DataFrame: {type(income_stmt)}")
