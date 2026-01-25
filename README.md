@@ -19,7 +19,7 @@ Interactive animations of financial data for stocks. Storcky is a play on the wo
 
 - Node.js 18+
 - pnpm 8+
-- Python 3.9+
+- Python 3.9+ (Python 3.10+ recommended for latest edgartools features)
 
 ### Installation
 

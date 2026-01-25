@@ -4,6 +4,9 @@ Service for fetching financial data from SEC EDGAR using EdgarTools.
 from typing import Optional, Dict, Any
 from edgar import Company
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EdgarService:
@@ -14,9 +17,12 @@ class EdgarService:
         """Get a company by its ticker symbol."""
         try:
             company = Company(ticker)
+            if company.not_found:
+                logger.warning(f"Company not found for ticker {ticker}")
+                return None
             return company
         except Exception as e:
-            print(f"Error fetching company for ticker {ticker}: {e}")
+            logger.error(f"Error fetching company for ticker {ticker}: {e}")
             return None
 
     @staticmethod
@@ -44,10 +50,16 @@ class EdgarService:
                 return None
 
             # Get the first column which should be the latest period
-            latest_period_col = income_stmt.columns[0] if len(income_stmt.columns) > 0 else None
-            
-            if latest_period_col is None:
+            # Financials DataFrames typically have date columns
+            if len(income_stmt.columns) == 0:
+                logger.warning("Income statement has no columns")
                 return None
+            
+            latest_period_col = income_stmt.columns[0]
+            
+            # Log available columns for debugging
+            logger.debug(f"Available income statement columns: {list(income_stmt.columns)}")
+            logger.debug(f"Using latest period column: {latest_period_col}")
 
             # Helper function to safely get value from DataFrame
             def get_value(df: pd.DataFrame, search_terms: list) -> Optional[float]:
@@ -120,12 +132,30 @@ class EdgarService:
             # Try to get from latest 10-Q filing
             try:
                 latest_10q = company.latest_tenq
-                if latest_10q and hasattr(latest_10q, 'filing_date'):
-                    filing_date = latest_10q.filing_date
+                if latest_10q:
+                    # Try different ways to get the filing date
+                    if hasattr(latest_10q, 'filing_date'):
+                        filing_date = latest_10q.filing_date
+                    elif hasattr(latest_10q, 'date'):
+                        filing_date = latest_10q.date
+                    else:
+                        filing_date = None
+                    
                     if filing_date:
-                        year = filing_date.year
-                        quarter = str((filing_date.month - 1) // 3 + 1)
-            except:
+                        if hasattr(filing_date, 'year'):
+                            year = filing_date.year
+                            quarter = str((filing_date.month - 1) // 3 + 1)
+                        elif isinstance(filing_date, str):
+                            # Parse string date
+                            from datetime import datetime
+                            try:
+                                dt = datetime.fromisoformat(filing_date.replace('Z', '+00:00'))
+                                year = dt.year
+                                quarter = str((dt.month - 1) // 3 + 1)
+                            except:
+                                pass
+            except Exception as e:
+                logger.debug(f"Could not get quarter/year from filing: {e}")
                 pass
 
             # If we couldn't get from filing, try to parse from column name
@@ -153,9 +183,7 @@ class EdgarService:
             }
 
         except Exception as e:
-            print(f"Error fetching financials: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error fetching financials: {e}", exc_info=True)
             return None
 
     @staticmethod
