@@ -1,12 +1,51 @@
 """
 Service for fetching financial data from SEC EDGAR using EdgarTools.
 """
+from decimal import Decimal
+from datetime import date, datetime
 from typing import Optional, Dict, Any
 from edgar import Company
+from app.models.schemas import (
+    CompanyInfo,
+    CompanyFact,
+    FactPeriod,
+    CompanyFactsResponse,
+    CompanyFactsSummaryResponse,
+)
 import pandas as pd
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class CompanyNotFoundError(Exception):
+    """Raised when a company cannot be found by identifier."""
+
+    pass
+
+
+class EdgarUnavailableError(Exception):
+    """Raised when Edgar/SEC data is unavailable."""
+
+    pass
+
+
+def _normalize_cik(cik: str) -> str:
+    """Normalize CIK to 10-digit zero-padded string."""
+    try:
+        cik_int = int(cik)
+        return str(cik_int).zfill(10)
+    except ValueError:
+        return cik
+
+
+def _is_cik(identifier: str) -> bool:
+    """Check if identifier looks like a CIK (numeric)."""
+    try:
+        int(identifier)
+        return True
+    except ValueError:
+        return False
 
 
 class EdgarService:
@@ -24,6 +63,142 @@ class EdgarService:
         except Exception as e:
             logger.error(f"Error fetching company for ticker {ticker}: {e}")
             return None
+
+    @staticmethod
+    def get_company_facts(
+        identifier: str,
+        period: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> CompanyFactsResponse:
+        """
+        Retrieve financial facts for a company by ticker or CIK.
+
+        Args:
+            identifier: Company ticker (e.g., "AAPL") or CIK (e.g., "0000320193")
+            period: Optional filter - "annual" or "quarterly"
+            limit: Optional limit on number of periods per fact
+
+        Returns:
+            CompanyFactsResponse with company info and facts
+
+        Raises:
+            CompanyNotFoundError: If company cannot be found
+            EdgarUnavailableError: If Edgar/SEC is unavailable
+        """
+        try:
+            # Determine if identifier is CIK or ticker
+            is_cik = _is_cik(identifier)
+
+            if is_cik:
+                cik_int = int(_normalize_cik(identifier))
+                company = Company(cik_int)
+                identifier_type = "cik"
+                cik = str(cik_int).zfill(10)
+            else:
+                company = Company(identifier)  # ticker; case-insensitive
+                identifier_type = "ticker"
+                cik = ""  # set below after not_found check
+
+            if company.not_found:
+                raise CompanyNotFoundError(f"Company not found: {identifier}")
+
+            if not is_cik:
+                cik = str(company.cik).zfill(10)
+
+            # Get company facts (EntityFacts) - use .facts property
+            facts = company.facts
+            if not facts:
+                raise CompanyNotFoundError(f"Company facts not found: {identifier}")
+
+            # Extract company info
+            company_info = CompanyInfo(
+                name=company.name,
+                cik=cik,
+                ticker=company.tickers[0] if company.tickers else None,
+            )
+
+            # Process facts via EntityFacts query API (no to_pandas)
+            facts_list: list[CompanyFact] = []
+            key_tags = [
+                "Revenues",
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "NetIncomeLoss",
+                "EarningsPerShareBasic",
+                "EarningsPerShareDiluted",
+                "Assets",
+                "Liabilities",
+                "StockholdersEquity",
+            ]
+
+            for tag in key_tags:
+                query = facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                matched = query.execute()
+                if not matched:
+                    continue
+
+                periods_list: list[FactPeriod] = []
+                label = matched[0].label
+                unit = getattr(matched[0], "unit", None) or "us-gaap"
+
+                for f in matched:
+                    if limit and len(periods_list) >= limit:
+                        break
+                    if period:
+                        fp = (getattr(f, "fiscal_period", "") or "").upper()
+                        if period == "annual" and fp != "FY":
+                            continue
+                        if period == "quarterly" and fp not in ("Q1", "Q2", "Q3", "Q4"):
+                            continue
+
+                    val = getattr(f, "numeric_value", None)
+                    if val is None:
+                        continue
+
+                    end_d = getattr(f, "period_end", None)
+                    start_d = getattr(f, "period_start", None) or end_d
+                    if not end_d:
+                        continue
+
+                    accn = getattr(f, "accession", None)
+                    filed = getattr(f, "filing_date", None)
+                    try:
+                        start = start_d.date() if isinstance(start_d, datetime) else start_d
+                        end = end_d.date() if isinstance(end_d, datetime) else end_d
+                        periods_list.append(
+                            FactPeriod(
+                                start_date=start,
+                                end_date=end,
+                                value=Decimal(str(val)),
+                                accn=str(accn) if accn else None,
+                                filed_at=filed,
+                            )
+                        )
+                    except (ValueError, AttributeError, TypeError):
+                        continue
+
+                if periods_list:
+                    facts_list.append(
+                        CompanyFact(tag=tag, label=label, unit=unit, periods=periods_list)
+                    )
+
+            return CompanyFactsResponse(
+                company=company_info,
+                identifier_type=identifier_type,
+                facts=facts_list,
+            )
+
+        except Exception as e:
+            if isinstance(e, (CompanyNotFoundError, EdgarUnavailableError)):
+                raise
+
+            # Try to determine error type
+            error_msg = str(e).lower()
+            if "not found" in error_msg or "no company" in error_msg:
+                raise CompanyNotFoundError(f"Company not found: {identifier}") from e
+
+            # Assume network/availability issue
+            raise EdgarUnavailableError(f"Edgar/SEC unavailable: {str(e)}") from e
+
 
     @staticmethod
     def get_latest_quarter_financials(company: Company) -> Optional[Dict[str, Any]]:
@@ -297,11 +472,90 @@ class EdgarService:
             logger.error(f"Error fetching financials: {e}", exc_info=True)
             return None
 
+
+    @staticmethod
+    def get_company_facts_summary(identifier: str) -> CompanyFactsSummaryResponse:
+        """
+        Get a condensed summary of key financial metrics.
+
+        Args:
+            identifier: Company ticker or CIK
+
+        Returns:
+            CompanyFactsSummaryResponse with key metrics
+        """
+        facts_response = EdgarService.get_company_facts(identifier, limit=4)
+
+        company_info = facts_response.company
+
+        # Extract key metrics
+        latest_revenue = None
+        latest_net_income = None
+        latest_eps = None
+        latest_total_assets = None
+        latest_total_liabilities = None
+        trailing_quarters_revenue: list[Decimal] = []
+        as_of_date: Optional[date] = None
+
+        for fact in facts_response.facts:
+            if not fact.periods:
+                continue
+
+            latest_period = fact.periods[0]
+            if not as_of_date or latest_period.end_date > as_of_date:
+                as_of_date = latest_period.end_date
+
+            if (
+                fact.tag == "Revenues"
+                or fact.tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+            ):
+                # Unit is now namespace, but we'll accept any for revenue
+                latest_revenue = latest_period.value
+                # Get trailing quarters
+                quarterly_periods = [p for p in fact.periods if p.end_date <= as_of_date][
+                    :4
+                ]
+                trailing_quarters_revenue = [p.value for p in quarterly_periods]
+
+            elif fact.tag == "NetIncomeLoss":
+                latest_net_income = latest_period.value
+
+            elif fact.tag in ["EarningsPerShareBasic", "EarningsPerShareDiluted"]:
+                latest_eps = latest_period.value
+
+            elif fact.tag == "Assets":
+                latest_total_assets = latest_period.value
+
+            elif fact.tag == "Liabilities":
+                latest_total_liabilities = latest_period.value
+
+        return CompanyFactsSummaryResponse(
+            company=company_info,
+            latest_revenue=latest_revenue,
+            latest_net_income=latest_net_income,
+            latest_eps=latest_eps,
+            latest_total_assets=latest_total_assets,
+            latest_total_liabilities=latest_total_liabilities,
+            trailing_quarters_revenue=trailing_quarters_revenue,
+            as_of_date=as_of_date,
+        )
+
     @staticmethod
     def get_financial_data(ticker: str) -> Optional[Dict[str, Any]]:
         """Get financial data for a given ticker symbol."""
         company = EdgarService.get_company_by_ticker(ticker)
         if not company:
             return None
-        
+
+        facts = EdgarService.get_company_facts_summary(ticker)
+
+        return {
+            "revenue": facts.latest_revenue,
+            "grossProfit": 11, #facts.grossProfit,
+            "ebitda": 12, #facts.ebitda,
+            "fullyDilutedShareCount": 13, #facts.fullyDilutedShareCount,
+            "longTermDebt": 14, #facts.longTermDebt,
+            "quarter": "Q3", #facts.quarter,
+            "year": 2025, #facts.year,
+        }
         return EdgarService.get_latest_quarter_financials(company)
