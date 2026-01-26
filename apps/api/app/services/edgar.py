@@ -399,7 +399,7 @@ class EdgarService:
                 if operating_income is not None and depreciation is not None:
                     ebitda = operating_income + depreciation
 
-            fully_diluted_shares = get_value(balance_sheet, [
+            common_shares_outstanding = get_value(balance_sheet, [
                 "WeightedAverageNumberOfDilutedSharesOutstanding",
                 "WeightedAverageNumberOfSharesOutstandingDiluted",
                 "SharesOutstandingDiluted",
@@ -462,7 +462,7 @@ class EdgarService:
                 "revenue": revenue,
                 "grossProfit": gross_profit,
                 "ebitda": ebitda,
-                "fullyDilutedShareCount": fully_diluted_shares,
+                "commonSharesOutstanding": common_shares_outstanding,
                 "longTermDebt": long_term_debt,
                 "quarter": quarter or "N/A",
                 "year": year,
@@ -490,6 +490,12 @@ class EdgarService:
 
         # Extract key metrics
         latest_revenue = None
+        latest_gross_profit = None
+        latest_ebitda = None
+        latest_common_shares_outstanding = None
+        latest_long_term_debt = None
+        latest_quarter = None
+        latest_year = None
         latest_net_income = None
         latest_eps = None
         latest_total_assets = None
@@ -504,6 +510,8 @@ class EdgarService:
             latest_period = fact.periods[0]
             if not as_of_date or latest_period.end_date > as_of_date:
                 as_of_date = latest_period.end_date
+                latest_quarter = "Q3"#latest_period.end_date.quarter
+                latest_year = 2025#latest_period.end_date.year
 
             if (
                 fact.tag == "Revenues"
@@ -528,6 +536,14 @@ class EdgarService:
 
             elif fact.tag == "Liabilities":
                 latest_total_liabilities = latest_period.value
+            elif fact.tag == "GrossProfit":
+                latest_gross_profit = latest_period.value
+            elif fact.tag == "EBITDA":
+                latest_ebitda = latest_period.value
+            elif fact.tag == "CommonStockSharesOutstanding":
+                latest_common_shares_outstanding = latest_period.value
+            elif fact.tag == "LongTermDebt":
+                latest_long_term_debt = latest_period.value
 
         return CompanyFactsSummaryResponse(
             company=company_info,
@@ -538,6 +554,12 @@ class EdgarService:
             latest_total_liabilities=latest_total_liabilities,
             trailing_quarters_revenue=trailing_quarters_revenue,
             as_of_date=as_of_date,
+            latest_gross_profit=latest_gross_profit,
+            latest_ebitda=latest_ebitda,
+            common_shares_outstanding=latest_common_shares_outstanding,
+            long_term_debt=latest_long_term_debt,
+            quarter=latest_quarter,
+            year=latest_year,
         )
 
     @staticmethod
@@ -551,11 +573,11 @@ class EdgarService:
 
         return {
             "revenue": facts.latest_revenue,
-            "grossProfit": 11, #facts.grossProfit,
-            "ebitda": 12, #facts.ebitda,
-            "fullyDilutedShareCount": 13, #facts.fullyDilutedShareCount,
-            "longTermDebt": 14, #facts.longTermDebt,
-            "quarter": "Q3", #facts.quarter,
-            "year": 2025, #facts.year,
+            "grossProfit": facts.latest_gross_profit,
+            "ebitda": facts.latest_ebitda,
+            "commonSharesOutstanding": facts.common_shares_outstanding,
+            "longTermDebt": facts.long_term_debt,
+            "quarter": facts.quarter,
+            "year": facts.year,
         }
-        return EdgarService.get_latest_quarter_financials(company)
+        # return EdgarService.get_latest_quarter_financials(company)

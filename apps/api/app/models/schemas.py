@@ -45,3 +45,9 @@ class CompanyFactsSummaryResponse(BaseModel):
     latest_total_liabilities: Optional[Decimal] = None
     trailing_quarters_revenue: list[Decimal] = Field(default_factory=list)
     as_of_date: Optional[date] = None
+    latest_gross_profit: Optional[Decimal] = None
+    latest_ebitda: Optional[Decimal] = None
+    common_shares_outstanding: Optional[Decimal] = None
+    long_term_debt: Optional[Decimal] = None
+    quarter: Optional[str] = None
+    year: Optional[int] = None

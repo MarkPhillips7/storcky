@@ -14,7 +14,7 @@ class FinancialDataResponse(BaseModel):
     revenue: Optional[float] = None
     grossProfit: Optional[float] = None
     ebitda: Optional[float] = None
-    fullyDilutedShareCount: Optional[float] = None
+    commonSharesOutstanding: Optional[float] = None
     longTermDebt: Optional[float] = None
     quarter: str
     year: Optional[int] = None
@@ -29,7 +29,7 @@ async def get_financial_data(ticker: str):
     - revenue: Total revenue
     - grossProfit: Gross profit
     - ebitda: Earnings before interest, taxes, depreciation, and amortization
-    - fullyDilutedShareCount: Fully diluted share count
+    - commonSharesOutstanding: Total number of common shares outstanding
     - longTermDebt: Long-term debt
     - quarter: Quarter number (1-4)
     - year: Year
@@ -49,7 +49,7 @@ async def get_financial_data(ticker: str):
             revenue=financial_data.get("revenue"),
             grossProfit=financial_data.get("grossProfit"),
             ebitda=financial_data.get("ebitda"),
-            fullyDilutedShareCount=financial_data.get("fullyDilutedShareCount"),
+            commonSharesOutstanding=financial_data.get("commonSharesOutstanding"),
             longTermDebt=financial_data.get("longTermDebt"),
             quarter=financial_data.get("quarter", "N/A"),
             year=financial_data.get("year"),
