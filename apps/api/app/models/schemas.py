@@ -1,53 +1,53 @@
-
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, Field
 
+
 class CompanyInfo(BaseModel):
     """Company identification information."""
+
     name: str
     cik: str
     ticker: Optional[str] = None
 
 
+class CompanyFact(BaseModel):
+    """A single value for a financial fact."""
+
+    concept: str
+    fact_period: str
+    value: str
+
+
 class FactPeriod(BaseModel):
     """A single period/value for a financial fact."""
+
+    id: str = Field(..., description="The fact period ID (e.g., 'Q1 2024')")
     start_date: date
     end_date: date
-    value: Decimal
+    period_type: str = Field(
+        ..., description="The period type (e.g., 'quarterly', 'annual')"
+    )
     accn: Optional[str] = Field(None, description="SEC accession number")
     filed_at: Optional[datetime] = Field(None, description="Filing date")
 
 
-class CompanyFact(BaseModel):
-    """A financial fact/metric for a company."""
-    tag: str = Field(..., description="The fact tag/identifier (e.g., 'Revenues')")
+class Concept(BaseModel):
+    """A financial concept."""
+
+    id: str = Field(..., description="The concept name (e.g., 'net_income')")
+    tag: str = Field(..., description="The concept tag/identifier (e.g., 'Revenues')")
     label: str = Field(..., description="Human-readable label")
-    unit: Optional[str] = Field(None, description="Unit of measurement (e.g., 'USD', 'shares')")
-    periods: list[FactPeriod] = Field(default_factory=list)
+    unit: Optional[str] = Field(
+        None, description="Unit of measurement (e.g., 'USD', 'shares')"
+    )
 
 
 class CompanyFactsResponse(BaseModel):
     """Response containing company financial facts."""
+
     company: CompanyInfo
-    identifier_type: str = Field(..., description="Whether identifier was 'ticker' or 'cik'")
+    concepts: list[Concept] = Field(default_factory=list)
+    periods: list[FactPeriod] = Field(default_factory=list)
     facts: list[CompanyFact]
-
-
-class CompanyFactsSummaryResponse(BaseModel):
-    """Condensed summary of key financial metrics."""
-    company: CompanyInfo
-    latest_revenue: Optional[Decimal] = None
-    latest_net_income: Optional[Decimal] = None
-    latest_eps: Optional[Decimal] = None
-    latest_total_assets: Optional[Decimal] = None
-    latest_total_liabilities: Optional[Decimal] = None
-    trailing_quarters_revenue: list[Decimal] = Field(default_factory=list)
-    as_of_date: Optional[date] = None
-    latest_gross_profit: Optional[Decimal] = None
-    latest_ebitda: Optional[Decimal] = None
-    common_shares_outstanding: Optional[Decimal] = None
-    long_term_debt: Optional[Decimal] = None
-    quarter: Optional[str] = None
-    year: Optional[int] = None

@@ -1,6 +1,7 @@
 """
 Service for fetching financial data from SEC EDGAR using EdgarTools.
 """
+
 from decimal import Decimal
 from datetime import date, datetime
 from typing import Optional, Dict, Any
@@ -57,7 +58,11 @@ def _get_convex_url() -> Optional[str]:
     if not url:
         logger.debug("CONVEX_URL environment variable not set")
     else:
-        logger.debug(f"CONVEX_URL found: {url[:50]}..." if len(url) > 50 else f"CONVEX_URL found: {url}")
+        logger.debug(
+            f"CONVEX_URL found: {url[:50]}..."
+            if len(url) > 50
+            else f"CONVEX_URL found: {url}"
+        )
     return url
 
 
@@ -70,11 +75,11 @@ def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:
     if not convex_url:
         logger.debug("CONVEX_URL not set, skipping Convex query")
         return None
-    
+
     try:
         # Convex HTTP API endpoint for queries
         query_url = f"{convex_url}/api/query"
-        
+
         # Call the getCompanyFactsByTicker query
         with httpx.Client(timeout=5.0) as client:
             response = client.post(
@@ -87,7 +92,7 @@ def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:
             )
             response.raise_for_status()
             result = response.json()
-            
+
             # Convex HTTP API returns: {"status": "success", "value": {...}, "logLines": [...]}
             if isinstance(result, dict):
                 if result.get("status") == "error":
@@ -98,14 +103,16 @@ def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:
                     if value is None:
                         return None
                     return value
-            
+
             return None
     except Exception as e:
         logger.warning(f"Failed to query Convex for facts: {e}")
         return None
 
 
-def _store_convex_facts(ticker: str, facts_json: Dict[str, Any], filing_date: datetime) -> bool:
+def _store_convex_facts(
+    ticker: str, facts_json: Dict[str, Any], filing_date: datetime
+) -> bool:
     """
     Store company facts in Convex. Always inserts a new record.
     Returns True if successful, False otherwise.
@@ -114,14 +121,18 @@ def _store_convex_facts(ticker: str, facts_json: Dict[str, Any], filing_date: da
     if not convex_url:
         logger.debug("CONVEX_URL not set, skipping Convex store")
         return False
-    
+
     try:
         # Convex HTTP API endpoint for mutations
         mutation_url = f"{convex_url}/api/mutation"
-        
+
         # Convert filing_date to timestamp (milliseconds)
-        filing_timestamp = int(filing_date.timestamp() * 1000) if isinstance(filing_date, datetime) else int(filing_date)
-        
+        filing_timestamp = (
+            int(filing_date.timestamp() * 1000)
+            if isinstance(filing_date, datetime)
+            else int(filing_date)
+        )
+
         # Call the storeCompanyFacts mutation
         with httpx.Client(timeout=10.0) as client:
             response = client.post(
@@ -138,15 +149,17 @@ def _store_convex_facts(ticker: str, facts_json: Dict[str, Any], filing_date: da
             )
             response.raise_for_status()
             result = response.json()
-            
+
             # Convex HTTP API returns: {"status": "success", "value": {...}, "logLines": [...]}
             if isinstance(result, dict):
                 if result.get("status") == "error":
-                    logger.warning(f"Convex mutation error: {result.get('errorMessage')}")
+                    logger.warning(
+                        f"Convex mutation error: {result.get('errorMessage')}"
+                    )
                     return False
                 if result.get("status") == "success":
                     return True
-            
+
             return False
     except Exception as e:
         logger.warning(f"Failed to store facts in Convex: {e}")
@@ -160,9 +173,9 @@ def _extract_most_recent_filing_date(facts) -> Optional[datetime]:
     """
     if not facts:
         return None
-    
+
     max_filing_date = None
-    
+
     try:
         # Query a few key tags to find the most recent filing date
         # We don't need to query all facts, just a sample
@@ -171,10 +184,12 @@ def _extract_most_recent_filing_date(facts) -> Optional[datetime]:
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "NetIncomeLoss",
         ]
-        
+
         for tag in key_tags:
             try:
-                query = facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                query = (
+                    facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                )
                 matched = query.execute()
                 if matched:
                     for f in matched[:5]:  # Check first 5 results
@@ -182,19 +197,24 @@ def _extract_most_recent_filing_date(facts) -> Optional[datetime]:
                         if filed:
                             if isinstance(filed, datetime):
                                 filing_dt = filed
+                            elif isinstance(filed, date):
+                                # Convert date to datetime at midnight for comparison
+                                filing_dt = datetime.combine(filed, datetime.min.time())
                             elif isinstance(filed, str):
                                 try:
-                                    filing_dt = datetime.fromisoformat(filed.replace("Z", "+00:00"))
+                                    filing_dt = datetime.fromisoformat(
+                                        filed.replace("Z", "+00:00")
+                                    )
                                 except:
                                     continue
                             else:
                                 continue
-                            
+
                             if max_filing_date is None or filing_dt > max_filing_date:
                                 max_filing_date = filing_dt
             except Exception:
                 continue
-        
+
         return max_filing_date
     except Exception as e:
         logger.warning(f"Error extracting filing date: {e}")
@@ -208,7 +228,7 @@ def _serialize_facts_to_json(facts) -> Optional[Dict[str, Any]]:
     """
     if not facts:
         return None
-    
+
     try:
         # Try to get the raw JSON representation if available
         if hasattr(facts, "to_dict"):
@@ -269,7 +289,7 @@ class EdgarService:
     @staticmethod
     def get_company_facts(
         identifier: str,
-        period: Optional[str] = None,
+        period_type: Optional[str] = "quarterly",
         limit: Optional[int] = None,
     ) -> CompanyFactsResponse:
         """
@@ -277,7 +297,7 @@ class EdgarService:
 
         Args:
             identifier: Company ticker (e.g., "AAPL") or CIK (e.g., "0000320193")
-            period: Optional filter - "annual" or "quarterly"
+            period_type: Optional filter - "annual" or "quarterly"
             limit: Optional limit on number of periods per fact
 
         Returns:
@@ -309,7 +329,7 @@ class EdgarService:
 
             # Get ticker for Convex lookup (only if identifier is a ticker)
             ticker_for_cache = identifier.upper() if not is_cik else None
-            
+
             # Check Convex for cached facts (only for ticker lookups)
             cached_facts_data = None
             cached_filing_date = None
@@ -319,7 +339,9 @@ class EdgarService:
                     cached_filing_date = cached_facts_data.get("filingDate")
                     if cached_filing_date:
                         # Convert timestamp to datetime for comparison
-                        cached_filing_date = datetime.fromtimestamp(cached_filing_date / 1000)
+                        cached_filing_date = datetime.fromtimestamp(
+                            cached_filing_date / 1000
+                        )
 
             # Get company facts (EntityFacts) - use .facts property
             facts = company.facts
@@ -328,15 +350,17 @@ class EdgarService:
 
             # Extract most recent filing date from fresh facts
             current_filing_date = _extract_most_recent_filing_date(facts)
-            
+
             # Check if we should use cached data or store new data
             should_use_cache = False
             if cached_facts_data and cached_filing_date and current_filing_date:
                 # Use cache if cached filing date is >= current filing date
                 if cached_filing_date >= current_filing_date:
                     should_use_cache = True
-                    logger.info(f"Using cached facts for {ticker_for_cache} (filing date: {cached_filing_date})")
-            
+                    logger.info(
+                        f"Using cached facts for {ticker_for_cache} (filing date: {cached_filing_date})"
+                    )
+
             # Store facts in Convex if we have a ticker and either:
             # 1. No cached data exists, or
             # 2. Current filing date is more recent than cached
@@ -344,8 +368,18 @@ class EdgarService:
                 if current_filing_date:
                     facts_json = _serialize_facts_to_json(facts)
                     if facts_json:
-                        _store_convex_facts(ticker_for_cache, facts_json, current_filing_date)
-                        logger.info(f"Stored facts in Convex for {ticker_for_cache} (filing date: {current_filing_date})")
+                        # Just for debugging store the JSON in a file
+                        # with open(f"facts_{ticker_for_cache}.json", "w") as f:
+                        #     json.dump(facts_json, f)
+                        facts_llm_json = facts.to_llm_context()
+                        with open(f"facts_{ticker_for_cache}_llm.json", "w") as f:
+                            json.dump(facts_llm_json, f)
+                        _store_convex_facts(
+                            ticker_for_cache, facts_json, current_filing_date
+                        )
+                        logger.info(
+                            f"Stored facts in Convex for {ticker_for_cache} (filing date: {current_filing_date})"
+                        )
 
             # Extract company info
             company_info = CompanyInfo(
@@ -368,7 +402,9 @@ class EdgarService:
             ]
 
             for tag in key_tags:
-                query = facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                query = (
+                    facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                )
                 matched = query.execute()
                 if not matched:
                     continue
@@ -399,7 +435,9 @@ class EdgarService:
                     accn = getattr(f, "accession", None)
                     filed = getattr(f, "filing_date", None)
                     try:
-                        start = start_d.date() if isinstance(start_d, datetime) else start_d
+                        start = (
+                            start_d.date() if isinstance(start_d, datetime) else start_d
+                        )
                         end = end_d.date() if isinstance(end_d, datetime) else end_d
                         periods_list.append(
                             FactPeriod(
@@ -415,7 +453,9 @@ class EdgarService:
 
                 if periods_list:
                     facts_list.append(
-                        CompanyFact(tag=tag, label=label, unit=unit, periods=periods_list)
+                        CompanyFact(
+                            tag=tag, label=label, unit=unit, periods=periods_list
+                        )
                     )
 
             return CompanyFactsResponse(
@@ -436,385 +476,111 @@ class EdgarService:
             # Assume network/availability issue
             raise EdgarUnavailableError(f"Edgar/SEC unavailable: {str(e)}") from e
 
+    # @staticmethod
+    # def get_company_facts_summary(identifier: str) -> CompanyFactsSummaryResponse:
+    #     """
+    #     Get a condensed summary of key financial metrics.
 
-    @staticmethod
-    def get_latest_quarter_financials(company: Company) -> Optional[Dict[str, Any]]:
-        """Get the latest quarter's financial data."""
-        try:
-            # Try to get quarterly financials from the latest 10-Q
-            # First, try using the financials property directly
-            financials = None
-            
-            # Try quarterly first
-            try:
-                quarterly = company.get_quarterly_financials()
-                if quarterly:
-                    financials = quarterly
-            except:
-                pass
-            
-            # Fallback to annual financials
-            if not financials:
-                try:
-                    financials = company.get_financials()
-                except:
-                    pass
-            
-            # If still no financials, try the property directly
-            if not financials:
-                try:
-                    financials = company.financials
-                except:
-                    pass
-            
-            if not financials:
-                logger.warning("Could not retrieve financials from any source")
-                return None
+    #     Args:
+    #         identifier: Company ticker or CIK
 
-            # Check what attributes/methods are available
-            logger.info(f"Financials object type: {type(financials)}")
-            logger.info(f"Financials object has 'income': {hasattr(financials, 'income')}")
-            logger.info(f"Financials object has 'income_statement': {hasattr(financials, 'income_statement')}")
-            logger.info(f"Financials object has 'balance_sheet': {hasattr(financials, 'balance_sheet')}")
-            # Log all attributes that might be relevant
-            attrs = [attr for attr in dir(financials) if not attr.startswith('_') and ('income' in attr.lower() or 'balance' in attr.lower() or 'cash' in attr.lower())]
-            logger.info(f"Relevant Financials attributes: {attrs}")
-            
-            # Try to access income statement - could be property or method
-            income_stmt = None
-            balance_sheet = None
-            
-            # income_statement is a method, not a property
-            if hasattr(financials, 'income_statement'):
-                income_stmt_attr = getattr(financials, 'income_statement')
-                if callable(income_stmt_attr):
-                    income_stmt = income_stmt_attr()
-                else:
-                    income_stmt = income_stmt_attr
-            elif hasattr(financials, 'income'):
-                income_attr = getattr(financials, 'income')
-                if callable(income_attr):
-                    income_stmt = income_attr()
-                else:
-                    income_stmt = income_attr
-            
-            # balance_sheet might also be a method
-            if hasattr(financials, 'balance_sheet'):
-                balance_sheet_attr = getattr(financials, 'balance_sheet')
-                if callable(balance_sheet_attr):
-                    balance_sheet = balance_sheet_attr()
-                else:
-                    balance_sheet = balance_sheet_attr
-            
-            if income_stmt is None or balance_sheet is None:
-                logger.error(f"Could not access income statement or balance sheet. Income: {income_stmt is not None}, Balance: {balance_sheet is not None}")
-                return None
+    #     Returns:
+    #         CompanyFactsSummaryResponse with key metrics
+    #     """
+    #     facts_response = EdgarService.get_company_facts(identifier, limit=4)
 
-            # Convert Statement objects to DataFrames if needed
-            if hasattr(income_stmt, 'to_dataframe'):
-                logger.info("Converting income statement Statement to DataFrame")
-                income_stmt = income_stmt.to_dataframe()
-            if hasattr(balance_sheet, 'to_dataframe'):
-                logger.info("Converting balance sheet Statement to DataFrame")
-                balance_sheet = balance_sheet.to_dataframe()
+    #     company_info = facts_response.company
 
-            # Ensure they're DataFrames
-            if not isinstance(income_stmt, pd.DataFrame):
-                logger.error(f"Income statement is not a DataFrame: {type(income_stmt)}")
-                return None
-            if not isinstance(balance_sheet, pd.DataFrame):
-                logger.error(f"Balance sheet is not a DataFrame: {type(balance_sheet)}")
-                return None
+    #     # Extract key metrics
+    #     latest_revenue = None
+    #     latest_gross_profit = None
+    #     latest_ebitda = None
+    #     latest_common_shares_outstanding = None
+    #     latest_long_term_debt = None
+    #     latest_quarter = None
+    #     latest_year = None
+    #     latest_net_income = None
+    #     latest_eps = None
+    #     latest_total_assets = None
+    #     latest_total_liabilities = None
+    #     trailing_quarters_revenue: list[Decimal] = []
+    #     as_of_date: Optional[date] = None
 
-            # Get the latest period (first column in DataFrame)
-            if income_stmt.empty or balance_sheet.empty:
-                logger.warning("Income statement or balance sheet is empty")
-                return None
+    #     for fact in facts_response.facts:
+    #         if not fact.periods:
+    #             continue
 
-            # Get the first column which should be the latest period
-            # Financials DataFrames typically have date columns
-            if len(income_stmt.columns) == 0:
-                logger.warning("Income statement has no columns")
-                return None
-            
-            latest_period_col = income_stmt.columns[0]
-            
-            # Log DataFrame structure for debugging
-            logger.info(f"Income statement shape: {income_stmt.shape}")
-            logger.info(f"Income statement index type: {type(income_stmt.index)}")
-            logger.info(f"Income statement index dtype: {income_stmt.index.dtype}")
-            logger.info(f"Income statement columns: {list(income_stmt.columns)}")
-            logger.info(f"Income statement index sample (first 5): {list(income_stmt.index[:5])}")
-            logger.info(f"Using latest period column: {latest_period_col}")
+    #         latest_period = fact.periods[0]
+    #         if not as_of_date or latest_period.end_date > as_of_date:
+    #             as_of_date = latest_period.end_date
+    #             latest_quarter = "Q3"  # latest_period.end_date.quarter
+    #             latest_year = 2025  # latest_period.end_date.year
 
-            # Helper function to safely get value from DataFrame
-            def get_value(df: pd.DataFrame, search_terms: list) -> Optional[float]:
-                """Search for a value in DataFrame using multiple possible row names."""
-                if df is None or df.empty:
-                    return None
-                
-                # Check if index is string type for string operations
-                index_is_string = False
-                if len(df.index) > 0:
-                    try:
-                        first_idx = df.index[0]
-                        index_is_string = isinstance(first_idx, str) or (hasattr(df.index, 'dtype') and df.index.dtype == 'object')
-                    except:
-                        pass
-                
-                for term in search_terms:
-                    # Try exact match first (works for both string and numeric indices)
-                    try:
-                        if term in df.index:
-                            value = df.loc[term, latest_period_col]
-                            if pd.notna(value):
-                                try:
-                                    return float(value)
-                                except (ValueError, TypeError):
-                                    pass
-                    except (KeyError, TypeError):
-                        pass
-                    
-                    # Try case-insensitive partial match (only if index is string)
-                    if index_is_string:
-                        try:
-                            # Convert index to string for comparison
-                            str_index = df.index.astype(str)
-                            matching_rows = df.index[str_index.str.contains(term, case=False, na=False)]
-                            if len(matching_rows) > 0:
-                                value = df.loc[matching_rows[0], latest_period_col]
-                                if pd.notna(value):
-                                    try:
-                                        return float(value)
-                                    except (ValueError, TypeError):
-                                        pass
-                        except (AttributeError, TypeError, ValueError) as e:
-                            logger.debug(f"String search failed for {term}: {e}")
-                            pass
-                    
-                    # If index is numeric, search in all string representations
-                    if not index_is_string:
-                        try:
-                            # Convert all index values to string and search
-                            for idx in df.index:
-                                idx_str = str(idx).lower()
-                                if term.lower() in idx_str:
-                                    value = df.loc[idx, latest_period_col]
-                                    if pd.notna(value):
-                                        try:
-                                            return float(value)
-                                        except (ValueError, TypeError):
-                                            pass
-                        except Exception as e:
-                            logger.debug(f"Index search failed for {term}: {e}")
-                            pass
-                
-                return None
+    #         if (
+    #             fact.tag == "Revenues"
+    #             or fact.tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    #         ):
+    #             # Unit is now namespace, but we'll accept any for revenue
+    #             latest_revenue = latest_period.value
+    #             # Get trailing quarters
+    #             quarterly_periods = [
+    #                 p for p in fact.periods if p.end_date <= as_of_date
+    #             ][:4]
+    #             trailing_quarters_revenue = [p.value for p in quarterly_periods]
 
-            # Extract financial metrics
-            revenue = get_value(income_stmt, [
-                "Revenues", "Revenue", "TotalRevenue", "NetSales", 
-                "SalesRevenueNet", "SalesAndRevenue"
-            ])
-            
-            gross_profit = get_value(income_stmt, [
-                "GrossProfit", "GrossProfitLoss", "GrossIncome"
-            ])
-            
-            ebitda = get_value(income_stmt, [
-                "EBITDA", "EarningsBeforeInterestTaxesDepreciationAndAmortization"
-            ])
-            
-            # If EBITDA not found, try to calculate from components
-            if ebitda is None:
-                operating_income = get_value(income_stmt, [
-                    "OperatingIncomeLoss", "OperatingIncome", "IncomeFromOperations"
-                ])
-                depreciation = get_value(income_stmt, [
-                    "DepreciationAndAmortization", "DepreciationAmortizationAndAccretion"
-                ])
-                if operating_income is not None and depreciation is not None:
-                    ebitda = operating_income + depreciation
+    #         elif fact.tag == "NetIncomeLoss":
+    #             latest_net_income = latest_period.value
 
-            common_shares_outstanding = get_value(balance_sheet, [
-                "WeightedAverageNumberOfDilutedSharesOutstanding",
-                "WeightedAverageNumberOfSharesOutstandingDiluted",
-                "SharesOutstandingDiluted",
-                "CommonStockSharesOutstanding"
-            ])
-            
-            long_term_debt = get_value(balance_sheet, [
-                "LongTermDebt", "LongTermDebtAndCapitalLeaseObligation",
-                "LongTermDebtNoncurrent", "DebtLongtermAndShorttermCombinedAmount"
-            ])
+    #         elif fact.tag in ["EarningsPerShareBasic", "EarningsPerShareDiluted"]:
+    #             latest_eps = latest_period.value
 
-            # Extract quarter and year from period column name or filing date
-            quarter = None
-            year = None
-            
-            # Try to get from latest 10-Q filing
-            try:
-                latest_10q = company.latest_tenq
-                if latest_10q:
-                    # Try different ways to get the filing date
-                    if hasattr(latest_10q, 'filing_date'):
-                        filing_date = latest_10q.filing_date
-                    elif hasattr(latest_10q, 'date'):
-                        filing_date = latest_10q.date
-                    else:
-                        filing_date = None
-                    
-                    if filing_date:
-                        if hasattr(filing_date, 'year'):
-                            year = filing_date.year
-                            quarter = str((filing_date.month - 1) // 3 + 1)
-                        elif isinstance(filing_date, str):
-                            # Parse string date
-                            from datetime import datetime
-                            try:
-                                dt = datetime.fromisoformat(filing_date.replace('Z', '+00:00'))
-                                year = dt.year
-                                quarter = str((dt.month - 1) // 3 + 1)
-                            except:
-                                pass
-            except Exception as e:
-                logger.debug(f"Could not get quarter/year from filing: {e}")
-                pass
+    #         elif fact.tag == "Assets":
+    #             latest_total_assets = latest_period.value
 
-            # If we couldn't get from filing, try to parse from column name
-            if not quarter or not year:
-                if latest_period_col:
-                    # Try to parse date format like "2024-03-31"
-                    if isinstance(latest_period_col, str) and "-" in latest_period_col:
-                        try:
-                            parts = latest_period_col.split("-")
-                            if len(parts) >= 2:
-                                year = int(parts[0])
-                                month = int(parts[1])
-                                quarter = str((month - 1) // 3 + 1)
-                        except:
-                            pass
+    #         elif fact.tag == "Liabilities":
+    #             latest_total_liabilities = latest_period.value
+    #         elif fact.tag == "GrossProfit":
+    #             latest_gross_profit = latest_period.value
+    #         elif fact.tag == "EBITDA":
+    #             latest_ebitda = latest_period.value
+    #         elif fact.tag == "CommonStockSharesOutstanding":
+    #             latest_common_shares_outstanding = latest_period.value
+    #         elif fact.tag == "LongTermDebt":
+    #             latest_long_term_debt = latest_period.value
 
-            return {
-                "revenue": revenue,
-                "grossProfit": gross_profit,
-                "ebitda": ebitda,
-                "commonSharesOutstanding": common_shares_outstanding,
-                "longTermDebt": long_term_debt,
-                "quarter": quarter or "N/A",
-                "year": year,
-            }
+    #     return CompanyFactsSummaryResponse(
+    #         company=company_info,
+    #         latest_revenue=latest_revenue,
+    #         latest_net_income=latest_net_income,
+    #         latest_eps=latest_eps,
+    #         latest_total_assets=latest_total_assets,
+    #         latest_total_liabilities=latest_total_liabilities,
+    #         trailing_quarters_revenue=trailing_quarters_revenue,
+    #         as_of_date=as_of_date,
+    #         latest_gross_profit=latest_gross_profit,
+    #         latest_ebitda=latest_ebitda,
+    #         common_shares_outstanding=latest_common_shares_outstanding,
+    #         long_term_debt=latest_long_term_debt,
+    #         quarter=latest_quarter,
+    #         year=latest_year,
+    #     )
 
-        except Exception as e:
-            logger.error(f"Error fetching financials: {e}", exc_info=True)
-            return None
+    # @staticmethod
+    # def get_financial_data(ticker: str) -> Optional[Dict[str, Any]]:
+    #     """Get financial data for a given ticker symbol."""
+    #     company = EdgarService.get_company_by_ticker(ticker)
+    #     if not company:
+    #         return None
 
+    #     facts = EdgarService.get_company_facts_summary(ticker)
 
-    @staticmethod
-    def get_company_facts_summary(identifier: str) -> CompanyFactsSummaryResponse:
-        """
-        Get a condensed summary of key financial metrics.
-
-        Args:
-            identifier: Company ticker or CIK
-
-        Returns:
-            CompanyFactsSummaryResponse with key metrics
-        """
-        facts_response = EdgarService.get_company_facts(identifier, limit=4)
-
-        company_info = facts_response.company
-
-        # Extract key metrics
-        latest_revenue = None
-        latest_gross_profit = None
-        latest_ebitda = None
-        latest_common_shares_outstanding = None
-        latest_long_term_debt = None
-        latest_quarter = None
-        latest_year = None
-        latest_net_income = None
-        latest_eps = None
-        latest_total_assets = None
-        latest_total_liabilities = None
-        trailing_quarters_revenue: list[Decimal] = []
-        as_of_date: Optional[date] = None
-
-        for fact in facts_response.facts:
-            if not fact.periods:
-                continue
-
-            latest_period = fact.periods[0]
-            if not as_of_date or latest_period.end_date > as_of_date:
-                as_of_date = latest_period.end_date
-                latest_quarter = "Q3"#latest_period.end_date.quarter
-                latest_year = 2025#latest_period.end_date.year
-
-            if (
-                fact.tag == "Revenues"
-                or fact.tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
-            ):
-                # Unit is now namespace, but we'll accept any for revenue
-                latest_revenue = latest_period.value
-                # Get trailing quarters
-                quarterly_periods = [p for p in fact.periods if p.end_date <= as_of_date][
-                    :4
-                ]
-                trailing_quarters_revenue = [p.value for p in quarterly_periods]
-
-            elif fact.tag == "NetIncomeLoss":
-                latest_net_income = latest_period.value
-
-            elif fact.tag in ["EarningsPerShareBasic", "EarningsPerShareDiluted"]:
-                latest_eps = latest_period.value
-
-            elif fact.tag == "Assets":
-                latest_total_assets = latest_period.value
-
-            elif fact.tag == "Liabilities":
-                latest_total_liabilities = latest_period.value
-            elif fact.tag == "GrossProfit":
-                latest_gross_profit = latest_period.value
-            elif fact.tag == "EBITDA":
-                latest_ebitda = latest_period.value
-            elif fact.tag == "CommonStockSharesOutstanding":
-                latest_common_shares_outstanding = latest_period.value
-            elif fact.tag == "LongTermDebt":
-                latest_long_term_debt = latest_period.value
-
-        return CompanyFactsSummaryResponse(
-            company=company_info,
-            latest_revenue=latest_revenue,
-            latest_net_income=latest_net_income,
-            latest_eps=latest_eps,
-            latest_total_assets=latest_total_assets,
-            latest_total_liabilities=latest_total_liabilities,
-            trailing_quarters_revenue=trailing_quarters_revenue,
-            as_of_date=as_of_date,
-            latest_gross_profit=latest_gross_profit,
-            latest_ebitda=latest_ebitda,
-            common_shares_outstanding=latest_common_shares_outstanding,
-            long_term_debt=latest_long_term_debt,
-            quarter=latest_quarter,
-            year=latest_year,
-        )
-
-    @staticmethod
-    def get_financial_data(ticker: str) -> Optional[Dict[str, Any]]:
-        """Get financial data for a given ticker symbol."""
-        company = EdgarService.get_company_by_ticker(ticker)
-        if not company:
-            return None
-
-        facts = EdgarService.get_company_facts_summary(ticker)
-
-        return {
-            "revenue": facts.latest_revenue,
-            "grossProfit": facts.latest_gross_profit,
-            "ebitda": facts.latest_ebitda,
-            "commonSharesOutstanding": facts.common_shares_outstanding,
-            "longTermDebt": facts.long_term_debt,
-            "quarter": facts.quarter,
-            "year": facts.year,
-        }
-        # return EdgarService.get_latest_quarter_financials(company)
+    #     return {
+    #         "revenue": facts.latest_revenue,
+    #         "grossProfit": facts.latest_gross_profit,
+    #         "ebitda": facts.latest_ebitda,
+    #         "commonSharesOutstanding": facts.common_shares_outstanding,
+    #         "longTermDebt": facts.long_term_debt,
+    #         "quarter": facts.quarter,
+    #         "year": facts.year,
+    #     }
+    #     # return EdgarService.get_latest_quarter_financials(company)
