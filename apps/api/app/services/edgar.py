@@ -53,7 +53,12 @@ def _is_cik(identifier: str) -> bool:
 
 def _get_convex_url() -> Optional[str]:
     """Get Convex URL from environment variable."""
-    return os.getenv("CONVEX_URL")
+    url = os.getenv("CONVEX_URL")
+    if not url:
+        logger.debug("CONVEX_URL environment variable not set")
+    else:
+        logger.debug(f"CONVEX_URL found: {url[:50]}..." if len(url) > 50 else f"CONVEX_URL found: {url}")
+    return url
 
 
 def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:

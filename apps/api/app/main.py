@@ -1,3 +1,13 @@
+from dotenv import load_dotenv
+import os
+from pathlib import Path
+
+# Load environment variables from .env file FIRST, before any other imports
+# that might use environment variables
+# Look for .env file in the api directory (parent of app directory)
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import financial
