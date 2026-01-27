@@ -2,60 +2,39 @@
 Financial data API routes.
 """
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-from app.services.edgar import EdgarService
+from app.services.edgar import EdgarService, CompanyNotFoundError, EdgarUnavailableError
+from app.models.schemas import CompanyFactsResponse
 
 
 router = APIRouter()
 
 
-class FinancialDataResponse(BaseModel):
-    revenue: Optional[float] = None
-    grossProfit: Optional[float] = None
-    ebitda: Optional[float] = None
-    commonSharesOutstanding: Optional[float] = None
-    longTermDebt: Optional[float] = None
-    quarter: str
-    year: Optional[int] = None
-
-
-@router.get("/financial/{ticker}", response_model=FinancialDataResponse)
+@router.get("/financial/{ticker}", response_model=CompanyFactsResponse)
 async def get_financial_data(ticker: str):
     """
-    Get the latest quarter's financial data for a given ticker symbol.
+    Get company financial facts for a given ticker symbol.
     
-    Returns:
-    - revenue: Total revenue
-    - grossProfit: Gross profit
-    - ebitda: Earnings before interest, taxes, depreciation, and amortization
-    - commonSharesOutstanding: Total number of common shares outstanding
-    - longTermDebt: Long-term debt
-    - quarter: Quarter number (1-4)
-    - year: Year
+    Returns CompanyFactsResponse containing:
+    - company: Company identification information
+    - concepts: List of financial concepts
+    - periods: List of fact periods
+    - facts: List of company facts linking concepts to periods with values
     """
     ticker_upper = ticker.upper()
     
     try:
-        financial_data = EdgarService.get_financial_data(ticker_upper)
-        
-        if not financial_data:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Financial data not found for ticker {ticker_upper}"
-            )
-        
-        return FinancialDataResponse(
-            revenue=financial_data.get("revenue"),
-            grossProfit=financial_data.get("grossProfit"),
-            ebitda=financial_data.get("ebitda"),
-            commonSharesOutstanding=financial_data.get("commonSharesOutstanding"),
-            longTermDebt=financial_data.get("longTermDebt"),
-            quarter=financial_data.get("quarter", "N/A"),
-            year=financial_data.get("year"),
+        response = EdgarService.get_company_facts(ticker_upper, period_type="quarterly", limit=4)
+        return response
+    except CompanyNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
         )
-    except HTTPException:
-        raise
+    except EdgarUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,

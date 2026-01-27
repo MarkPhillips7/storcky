@@ -1,16 +1,6 @@
 import { notFound } from "next/navigation"
-import { fetchFinancialData } from "@/lib/api"
+import { fetchFinancialData, CompanyFactsResponse, Concept, CompanyFact, FactPeriod } from "@/lib/api"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-
-interface FinancialData {
-  revenue: number | null
-  grossProfit: number | null
-  ebitda: number | null
-  fullyDilutedShareCount: number | null
-  longTermDebt: number | null
-  quarter: string
-  year: number
-}
 
 interface PageProps {
   params: {
@@ -18,20 +8,74 @@ interface PageProps {
   }
 }
 
+function formatValue(value: string, unit: string | null): string {
+  const numValue = parseFloat(value)
+  if (isNaN(numValue)) return value
+
+  // Check if it's a currency unit
+  if (unit?.toLowerCase().includes("usd") || unit?.toLowerCase().includes("currency")) {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(numValue)
+  }
+
+  // Check if it's shares
+  if (unit?.toLowerCase().includes("share")) {
+    return new Intl.NumberFormat("en-US").format(numValue)
+  }
+
+  // Default number formatting
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(numValue)
+}
+
+function getLatestFactForConcept(
+  conceptId: string,
+  facts: CompanyFact[],
+  periods: FactPeriod[]
+): { fact: CompanyFact; period: FactPeriod | null } | null {
+  // Find all facts for this concept
+  const conceptFacts = facts.filter((f) => f.concept === conceptId)
+  if (conceptFacts.length === 0) return null
+
+  // Sort periods by end_date descending to find the latest
+  const sortedPeriods = [...periods].sort((a, b) => 
+    new Date(b.end_date).getTime() - new Date(a.end_date).getTime()
+  )
+
+  // Find the latest fact by matching with the latest period
+  for (const period of sortedPeriods) {
+    const fact = conceptFacts.find((f) => f.fact_period === period.id)
+    if (fact) {
+      return { fact, period }
+    }
+  }
+
+  // Fallback: return the first fact with its period
+  const firstFact = conceptFacts[0]
+  const period = periods.find((p) => p.id === firstFact.fact_period) || null
+  return { fact: firstFact, period }
+}
+
 export default async function StockPage({ params }: PageProps) {
   const { ticker } = params
   const tickerUpper = ticker.toUpperCase()
 
-  let financialData: FinancialData | null = null
+  let companyFacts: CompanyFactsResponse | null = null
   let error: string | null = null
 
   try {
-    financialData = await fetchFinancialData(tickerUpper)
+    companyFacts = await fetchFinancialData(tickerUpper)
   } catch (err) {
     error = err instanceof Error ? err.message : "Failed to fetch financial data"
   }
 
-  if (error || !financialData) {
+  if (error || !companyFacts) {
     return (
       <div className="container mx-auto p-8">
         <h1 className="text-4xl font-bold mb-4">{tickerUpper}</h1>
@@ -47,78 +91,53 @@ export default async function StockPage({ params }: PageProps) {
     )
   }
 
-  const formatCurrency = (value: number | null): string => {
-    if (value === null) return "N/A"
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value)
-  }
+  const { company, concepts, periods, facts } = companyFacts
 
-  const formatNumber = (value: number | null): string => {
-    if (value === null) return "N/A"
-    return new Intl.NumberFormat("en-US").format(value)
-  }
+  // Get the latest period for display
+  const latestPeriod = periods.length > 0
+    ? [...periods].sort((a, b) => 
+        new Date(b.end_date).getTime() - new Date(a.end_date).getTime()
+      )[0]
+    : null
 
   return (
     <div className="container mx-auto p-8">
-      <h1 className="text-4xl font-bold mb-8">{tickerUpper}</h1>
-      <p className="text-muted-foreground mb-8">
-        Latest Quarter: Q{financialData.quarter} {financialData.year}
-      </p>
+      <h1 className="text-4xl font-bold mb-2">{company.name || tickerUpper}</h1>
+      {company.ticker && (
+        <p className="text-muted-foreground mb-2">Ticker: {company.ticker}</p>
+      )}
+      {latestPeriod && (
+        <p className="text-muted-foreground mb-8">
+          Latest Period: {latestPeriod.id} ({latestPeriod.period_type})
+        </p>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>Revenue</CardTitle>
-            <CardDescription>Total revenue for the quarter</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{formatCurrency(financialData.revenue)}</p>
-          </CardContent>
-        </Card>
+        {concepts.map((concept) => {
+          const latestFactData = getLatestFactForConcept(concept.id, facts, periods)
+          
+          if (!latestFactData) {
+            return null
+          }
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Gross Profit</CardTitle>
-            <CardDescription>Gross profit for the quarter</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{formatCurrency(financialData.grossProfit)}</p>
-          </CardContent>
-        </Card>
+          const { fact, period } = latestFactData
+          const formattedValue = formatValue(fact.value, concept.unit)
 
-        <Card>
-          <CardHeader>
-            <CardTitle>EBITDA</CardTitle>
-            <CardDescription>Earnings before interest, taxes, depreciation, and amortization</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{formatCurrency(financialData.ebitda)}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Fully Diluted Share Count</CardTitle>
-            <CardDescription>Total shares outstanding (fully diluted)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{formatNumber(financialData.fullyDilutedShareCount)}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Long Term Debt</CardTitle>
-            <CardDescription>Long-term debt obligations</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{formatCurrency(financialData.longTermDebt)}</p>
-          </CardContent>
-        </Card>
+          return (
+            <Card key={concept.id}>
+              <CardHeader>
+                <CardTitle>{concept.label}</CardTitle>
+                <CardDescription>
+                  {period ? `Period: ${period.id}` : concept.tag}
+                  {concept.unit && ` • Unit: ${concept.unit}`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{formattedValue}</p>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
     </div>
   )

@@ -16,14 +16,13 @@ class CompanyFact(BaseModel):
     """A single value for a financial fact."""
 
     concept: str
-    fact_period: str
     value: str
 
 
 class FactPeriod(BaseModel):
     """A single period/value for a financial fact."""
 
-    id: str = Field(..., description="The fact period ID (e.g., 'Q1 2024')")
+    id: str = Field(..., description="The fact period ID (e.g., 'Q3 2025')")
     start_date: date
     end_date: date
     period_type: str = Field(
@@ -31,12 +30,12 @@ class FactPeriod(BaseModel):
     )
     accn: Optional[str] = Field(None, description="SEC accession number")
     filed_at: Optional[datetime] = Field(None, description="Filing date")
+    facts: list[CompanyFact]
 
 
 class Concept(BaseModel):
     """A financial concept."""
 
-    id: str = Field(..., description="The concept name (e.g., 'net_income')")
     tag: str = Field(..., description="The concept tag/identifier (e.g., 'Revenues')")
     label: str = Field(..., description="Human-readable label")
     unit: Optional[str] = Field(
@@ -50,4 +49,3 @@ class CompanyFactsResponse(BaseModel):
     company: CompanyInfo
     concepts: list[Concept] = Field(default_factory=list)
     periods: list[FactPeriod] = Field(default_factory=list)
-    facts: list[CompanyFact]
