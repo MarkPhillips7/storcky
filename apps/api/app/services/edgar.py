@@ -4,14 +4,14 @@ Service for fetching financial data from SEC EDGAR using EdgarTools.
 
 from decimal import Decimal
 from datetime import date, datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from edgar import Company
 from app.models.schemas import (
     CompanyInfo,
     CompanyFact,
     FactPeriod,
+    Concept,
     CompanyFactsResponse,
-    CompanyFactsSummaryResponse,
 )
 import pandas as pd
 import logging
@@ -66,15 +66,15 @@ def _get_convex_url() -> Optional[str]:
     return url
 
 
-def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:
+def _query_convex_facts(ticker: str) -> Tuple[Optional[CompanyFactsResponse], Optional[datetime]]:
     """
     Query Convex for cached company facts by ticker.
-    Returns the most recent facts data or None if not found.
+    Returns a tuple of (CompanyFactsResponse, filing_date) or (None, None) if not found.
     """
     convex_url = _get_convex_url()
     if not convex_url:
         logger.debug("CONVEX_URL not set, skipping Convex query")
-        return None
+        return None, None
 
     try:
         # Convex HTTP API endpoint for queries
@@ -97,21 +97,33 @@ def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:
             if isinstance(result, dict):
                 if result.get("status") == "error":
                     logger.warning(f"Convex query error: {result.get('errorMessage')}")
-                    return None
+                    return None, None
                 if result.get("status") == "success":
                     value = result.get("value")
                     if value is None:
-                        return None
-                    return value
+                        return None, None
+                    
+                    # Extract filing date
+                    filing_date_ts = value.get("filingDate")
+                    filing_date = None
+                    if filing_date_ts:
+                        filing_date = datetime.fromtimestamp(filing_date_ts / 1000)
+                    
+                    # Deserialize the CompanyFactsResponse from the cached data
+                    facts_data = value.get("facts")
+                    if facts_data:
+                        facts_response = _deserialize_company_facts_response(facts_data)
+                        return facts_response, filing_date
+                    return None, None
 
-            return None
+            return None, None
     except Exception as e:
         logger.warning(f"Failed to query Convex for facts: {e}")
-        return None
+        return None, None
 
 
 def _store_convex_facts(
-    ticker: str, facts_json: Dict[str, Any], filing_date: datetime
+    ticker: str, response: CompanyFactsResponse, filing_date: datetime
 ) -> bool:
     """
     Store company facts in Convex. Always inserts a new record.
@@ -132,6 +144,9 @@ def _store_convex_facts(
             if isinstance(filing_date, datetime)
             else int(filing_date)
         )
+
+        # Serialize CompanyFactsResponse to JSON
+        facts_json = _serialize_company_facts_response(response)
 
         # Call the storeCompanyFacts mutation
         with httpx.Client(timeout=10.0) as client:
@@ -270,6 +285,52 @@ def _deserialize_facts_from_json(facts_json: Dict[str, Any]):
     return facts_json
 
 
+def _generate_period_id(fiscal_period: str, end_date: date) -> str:
+    """
+    Generate a period ID in the format "Q1 2024" or "FY 2023".
+    
+    Args:
+        fiscal_period: The fiscal period string (Q1, Q2, Q3, Q4, FY, etc.)
+        end_date: The period end date
+        
+    Returns:
+        Period ID string (e.g., "Q1 2024", "FY 2023")
+    """
+    fp = fiscal_period.upper().strip() if fiscal_period else "UNKNOWN"
+    year = end_date.year
+    return f"{fp} {year}"
+
+
+def _serialize_company_facts_response(response: CompanyFactsResponse) -> Dict[str, Any]:
+    """
+    Serialize CompanyFactsResponse to JSON-compatible dictionary.
+    
+    Args:
+        response: The CompanyFactsResponse to serialize
+        
+    Returns:
+        JSON-compatible dictionary
+    """
+    return response.model_dump(mode="json")
+
+
+def _deserialize_company_facts_response(data: Dict[str, Any]) -> Optional[CompanyFactsResponse]:
+    """
+    Deserialize JSON dictionary to CompanyFactsResponse.
+    
+    Args:
+        data: JSON dictionary containing CompanyFactsResponse data
+        
+    Returns:
+        CompanyFactsResponse object or None if deserialization fails
+    """
+    try:
+        return CompanyFactsResponse.model_validate(data)
+    except Exception as e:
+        logger.warning(f"Failed to deserialize CompanyFactsResponse: {e}")
+        return None
+
+
 class EdgarService:
     """Service for interacting with SEC EDGAR data."""
 
@@ -314,11 +375,9 @@ class EdgarService:
             if is_cik:
                 cik_int = int(_normalize_cik(identifier))
                 company = Company(cik_int)
-                identifier_type = "cik"
                 cik = str(cik_int).zfill(10)
             else:
                 company = Company(identifier)  # ticker; case-insensitive
-                identifier_type = "ticker"
                 cik = ""  # set below after not_found check
 
             if company.not_found:
@@ -331,17 +390,10 @@ class EdgarService:
             ticker_for_cache = identifier.upper() if not is_cik else None
 
             # Check Convex for cached facts (only for ticker lookups)
-            cached_facts_data = None
+            cached_response = None
             cached_filing_date = None
             if ticker_for_cache:
-                cached_facts_data = _query_convex_facts(ticker_for_cache)
-                if cached_facts_data:
-                    cached_filing_date = cached_facts_data.get("filingDate")
-                    if cached_filing_date:
-                        # Convert timestamp to datetime for comparison
-                        cached_filing_date = datetime.fromtimestamp(
-                            cached_filing_date / 1000
-                        )
+                cached_response, cached_filing_date = _query_convex_facts(ticker_for_cache)
 
             # Get company facts (EntityFacts) - use .facts property
             facts = company.facts
@@ -351,35 +403,15 @@ class EdgarService:
             # Extract most recent filing date from fresh facts
             current_filing_date = _extract_most_recent_filing_date(facts)
 
-            # Check if we should use cached data or store new data
+            # Check if we should use cached data
             should_use_cache = False
-            if cached_facts_data and cached_filing_date and current_filing_date:
+            if cached_response and cached_filing_date and current_filing_date:
                 # Use cache if cached filing date is >= current filing date
                 if cached_filing_date >= current_filing_date:
                     should_use_cache = True
                     logger.info(
                         f"Using cached facts for {ticker_for_cache} (filing date: {cached_filing_date})"
                     )
-
-            # Store facts in Convex if we have a ticker and either:
-            # 1. No cached data exists, or
-            # 2. Current filing date is more recent than cached
-            if ticker_for_cache and (not cached_facts_data or not should_use_cache):
-                if current_filing_date:
-                    facts_json = _serialize_facts_to_json(facts)
-                    if facts_json:
-                        # Just for debugging store the JSON in a file
-                        # with open(f"facts_{ticker_for_cache}.json", "w") as f:
-                        #     json.dump(facts_json, f)
-                        facts_llm_json = facts.to_llm_context()
-                        with open(f"facts_{ticker_for_cache}_llm.json", "w") as f:
-                            json.dump(facts_llm_json, f)
-                        _store_convex_facts(
-                            ticker_for_cache, facts_json, current_filing_date
-                        )
-                        logger.info(
-                            f"Stored facts in Convex for {ticker_for_cache} (filing date: {current_filing_date})"
-                        )
 
             # Extract company info
             company_info = CompanyInfo(
@@ -388,8 +420,16 @@ class EdgarService:
                 ticker=company.tickers[0] if company.tickers else None,
             )
 
-            # Process facts via EntityFacts query API (no to_pandas)
+            # If we have cached data and it's current, return it
+            if cached_response and should_use_cache:
+                return cached_response
+
+            # Process facts via EntityFacts query API
+            # Build concepts, periods, and facts separately
+            concepts_dict: Dict[str, Concept] = {}  # keyed by concept tag
+            periods_dict: Dict[str, FactPeriod] = {}  # keyed by period ID
             facts_list: list[CompanyFact] = []
+
             key_tags = [
                 "Revenues",
                 "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -409,18 +449,32 @@ class EdgarService:
                 if not matched:
                     continue
 
-                periods_list: list[FactPeriod] = []
+                # Get concept metadata from first match
                 label = matched[0].label
                 unit = getattr(matched[0], "unit", None) or "us-gaap"
 
+                # Create or get concept
+                concept_id = tag
+                if concept_id not in concepts_dict:
+                    concepts_dict[concept_id] = Concept(
+                        id=concept_id,
+                        tag=tag,
+                        label=label,
+                        unit=unit,
+                    )
+
+                # Process each fact value
+                period_count = 0
                 for f in matched:
-                    if limit and len(periods_list) >= limit:
+                    if limit and period_count >= limit:
                         break
-                    if period:
+
+                    # Filter by period_type if specified
+                    if period_type:
                         fp = (getattr(f, "fiscal_period", "") or "").upper()
-                        if period == "annual" and fp != "FY":
+                        if period_type == "annual" and fp != "FY":
                             continue
-                        if period == "quarterly" and fp not in ("Q1", "Q2", "Q3", "Q4"):
+                        if period_type == "quarterly" and fp not in ("Q1", "Q2", "Q3", "Q4"):
                             continue
 
                     val = getattr(f, "numeric_value", None)
@@ -434,35 +488,66 @@ class EdgarService:
 
                     accn = getattr(f, "accession", None)
                     filed = getattr(f, "filing_date", None)
+                    fp = (getattr(f, "fiscal_period", "") or "").upper()
+
                     try:
                         start = (
                             start_d.date() if isinstance(start_d, datetime) else start_d
                         )
                         end = end_d.date() if isinstance(end_d, datetime) else end_d
-                        periods_list.append(
-                            FactPeriod(
+
+                        # Determine period_type from fiscal_period
+                        fact_period_type = "annual" if fp == "FY" else "quarterly"
+
+                        # Generate period ID
+                        period_id = _generate_period_id(fp, end)
+
+                        # Create or get period
+                        if period_id not in periods_dict:
+                            periods_dict[period_id] = FactPeriod(
+                                id=period_id,
                                 start_date=start,
                                 end_date=end,
-                                value=Decimal(str(val)),
+                                period_type=fact_period_type,
                                 accn=str(accn) if accn else None,
                                 filed_at=filed,
                             )
+
+                        # Create fact linking concept to period
+                        facts_list.append(
+                            CompanyFact(
+                                concept=concept_id,
+                                fact_period=period_id,
+                                value=str(val),
+                            )
                         )
-                    except (ValueError, AttributeError, TypeError):
+
+                        period_count += 1
+                    except (ValueError, AttributeError, TypeError) as e:
+                        logger.debug(f"Error processing fact: {e}")
                         continue
 
-                if periods_list:
-                    facts_list.append(
-                        CompanyFact(
-                            tag=tag, label=label, unit=unit, periods=periods_list
-                        )
-                    )
-
-            return CompanyFactsResponse(
+            # Build the response
+            response = CompanyFactsResponse(
                 company=company_info,
-                identifier_type=identifier_type,
+                concepts=list(concepts_dict.values()),
+                periods=list(periods_dict.values()),
                 facts=facts_list,
             )
+
+            # Store response in Convex if we have a ticker and either:
+            # 1. No cached data exists, or
+            # 2. Current filing date is more recent than cached
+            if ticker_for_cache and current_filing_date and not should_use_cache:
+                # Store the CompanyFactsResponse
+                _store_convex_facts(
+                    ticker_for_cache, response, current_filing_date
+                )
+                logger.info(
+                    f"Stored facts in Convex for {ticker_for_cache} (filing date: {current_filing_date})"
+                )
+
+            return response
 
         except Exception as e:
             if isinstance(e, (CompanyNotFoundError, EdgarUnavailableError)):
