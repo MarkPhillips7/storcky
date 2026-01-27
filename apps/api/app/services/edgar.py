@@ -14,6 +14,9 @@ from app.models.schemas import (
 )
 import pandas as pd
 import logging
+import json
+import os
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,200 @@ def _is_cik(identifier: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _get_convex_url() -> Optional[str]:
+    """Get Convex URL from environment variable."""
+    return os.getenv("CONVEX_URL")
+
+
+def _query_convex_facts(ticker: str) -> Optional[Dict[str, Any]]:
+    """
+    Query Convex for cached company facts by ticker.
+    Returns the most recent facts data or None if not found.
+    """
+    convex_url = _get_convex_url()
+    if not convex_url:
+        logger.debug("CONVEX_URL not set, skipping Convex query")
+        return None
+    
+    try:
+        # Convex HTTP API endpoint for queries
+        query_url = f"{convex_url}/api/query"
+        
+        # Call the getCompanyFactsByTicker query
+        with httpx.Client(timeout=5.0) as client:
+            response = client.post(
+                query_url,
+                json={
+                    "path": "companyFacts:getCompanyFactsByTicker",
+                    "args": {"ticker": ticker},
+                    "format": "json",
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Convex HTTP API returns: {"status": "success", "value": {...}, "logLines": [...]}
+            if isinstance(result, dict):
+                if result.get("status") == "error":
+                    logger.warning(f"Convex query error: {result.get('errorMessage')}")
+                    return None
+                if result.get("status") == "success":
+                    value = result.get("value")
+                    if value is None:
+                        return None
+                    return value
+            
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to query Convex for facts: {e}")
+        return None
+
+
+def _store_convex_facts(ticker: str, facts_json: Dict[str, Any], filing_date: datetime) -> bool:
+    """
+    Store company facts in Convex. Always inserts a new record.
+    Returns True if successful, False otherwise.
+    """
+    convex_url = _get_convex_url()
+    if not convex_url:
+        logger.debug("CONVEX_URL not set, skipping Convex store")
+        return False
+    
+    try:
+        # Convex HTTP API endpoint for mutations
+        mutation_url = f"{convex_url}/api/mutation"
+        
+        # Convert filing_date to timestamp (milliseconds)
+        filing_timestamp = int(filing_date.timestamp() * 1000) if isinstance(filing_date, datetime) else int(filing_date)
+        
+        # Call the storeCompanyFacts mutation
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(
+                mutation_url,
+                json={
+                    "path": "companyFacts:storeCompanyFacts",
+                    "args": {
+                        "ticker": ticker,
+                        "facts": facts_json,
+                        "filingDate": filing_timestamp,
+                    },
+                    "format": "json",
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Convex HTTP API returns: {"status": "success", "value": {...}, "logLines": [...]}
+            if isinstance(result, dict):
+                if result.get("status") == "error":
+                    logger.warning(f"Convex mutation error: {result.get('errorMessage')}")
+                    return False
+                if result.get("status") == "success":
+                    return True
+            
+            return False
+    except Exception as e:
+        logger.warning(f"Failed to store facts in Convex: {e}")
+        return False
+
+
+def _extract_most_recent_filing_date(facts) -> Optional[datetime]:
+    """
+    Extract the most recent filing_date from the EntityFacts object.
+    Returns the most recent filing_date as a datetime, or None if not found.
+    """
+    if not facts:
+        return None
+    
+    max_filing_date = None
+    
+    try:
+        # Query a few key tags to find the most recent filing date
+        # We don't need to query all facts, just a sample
+        key_tags = [
+            "Revenues",
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "NetIncomeLoss",
+        ]
+        
+        for tag in key_tags:
+            try:
+                query = facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                matched = query.execute()
+                if matched:
+                    for f in matched[:5]:  # Check first 5 results
+                        filed = getattr(f, "filing_date", None)
+                        if filed:
+                            if isinstance(filed, datetime):
+                                filing_dt = filed
+                            elif isinstance(filed, str):
+                                try:
+                                    filing_dt = datetime.fromisoformat(filed.replace("Z", "+00:00"))
+                                except:
+                                    continue
+                            else:
+                                continue
+                            
+                            if max_filing_date is None or filing_dt > max_filing_date:
+                                max_filing_date = filing_dt
+            except Exception:
+                continue
+        
+        return max_filing_date
+    except Exception as e:
+        logger.warning(f"Error extracting filing date: {e}")
+        return None
+
+
+def _serialize_facts_to_json(facts) -> Optional[Dict[str, Any]]:
+    """
+    Serialize EntityFacts object to a JSON-compatible dictionary.
+    Returns None if serialization fails.
+    """
+    if not facts:
+        return None
+    
+    try:
+        # Try to get the raw JSON representation if available
+        if hasattr(facts, "to_dict"):
+            return facts.to_dict()
+        elif hasattr(facts, "__dict__"):
+            # Convert to dict and handle datetime objects
+            result = {}
+            for key, value in facts.__dict__.items():
+                if isinstance(value, datetime):
+                    result[key] = value.isoformat()
+                elif isinstance(value, date):
+                    result[key] = value.isoformat()
+                elif hasattr(value, "__dict__"):
+                    result[key] = _serialize_facts_to_json(value)
+                else:
+                    try:
+                        json.dumps(value)  # Test if serializable
+                        result[key] = value
+                    except (TypeError, ValueError):
+                        result[key] = str(value)
+            return result
+        else:
+            # Fallback: convert to string representation
+            # This is not ideal but ensures we can store something
+            return {"_serialized": str(facts)}
+    except Exception as e:
+        logger.warning(f"Error serializing facts: {e}")
+        return None
+
+
+def _deserialize_facts_from_json(facts_json: Dict[str, Any]):
+    """
+    Deserialize JSON facts data back to a format that can be used.
+    For now, we'll need to reconstruct the EntityFacts-like structure.
+    This is a simplified version - in practice, we may need to work with the raw data.
+    """
+    # For now, return the JSON as-is since we'll process it directly
+    # The actual EntityFacts object reconstruction would be complex
+    return facts_json
 
 
 class EdgarService:
@@ -105,10 +302,45 @@ class EdgarService:
             if not is_cik:
                 cik = str(company.cik).zfill(10)
 
+            # Get ticker for Convex lookup (only if identifier is a ticker)
+            ticker_for_cache = identifier.upper() if not is_cik else None
+            
+            # Check Convex for cached facts (only for ticker lookups)
+            cached_facts_data = None
+            cached_filing_date = None
+            if ticker_for_cache:
+                cached_facts_data = _query_convex_facts(ticker_for_cache)
+                if cached_facts_data:
+                    cached_filing_date = cached_facts_data.get("filingDate")
+                    if cached_filing_date:
+                        # Convert timestamp to datetime for comparison
+                        cached_filing_date = datetime.fromtimestamp(cached_filing_date / 1000)
+
             # Get company facts (EntityFacts) - use .facts property
             facts = company.facts
             if not facts:
                 raise CompanyNotFoundError(f"Company facts not found: {identifier}")
+
+            # Extract most recent filing date from fresh facts
+            current_filing_date = _extract_most_recent_filing_date(facts)
+            
+            # Check if we should use cached data or store new data
+            should_use_cache = False
+            if cached_facts_data and cached_filing_date and current_filing_date:
+                # Use cache if cached filing date is >= current filing date
+                if cached_filing_date >= current_filing_date:
+                    should_use_cache = True
+                    logger.info(f"Using cached facts for {ticker_for_cache} (filing date: {cached_filing_date})")
+            
+            # Store facts in Convex if we have a ticker and either:
+            # 1. No cached data exists, or
+            # 2. Current filing date is more recent than cached
+            if ticker_for_cache and (not cached_facts_data or not should_use_cache):
+                if current_filing_date:
+                    facts_json = _serialize_facts_to_json(facts)
+                    if facts_json:
+                        _store_convex_facts(ticker_for_cache, facts_json, current_filing_date)
+                        logger.info(f"Stored facts in Convex for {ticker_for_cache} (filing date: {current_filing_date})")
 
             # Extract company info
             company_info = CompanyInfo(
