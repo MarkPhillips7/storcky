@@ -369,6 +369,17 @@ def _deserialize_company_facts_response(
                     )
                     period["facts"] = []
 
+        # Normalize concepts to ensure label field is present
+        # This handles cases where data stored in Convex might have None labels
+        if "concepts" in data and isinstance(data["concepts"], list):
+            for concept in data["concepts"]:
+                if isinstance(concept, dict):
+                    if "label" not in concept or concept["label"] is None:
+                        # Use tag as fallback label
+                        tag = concept.get("tag", "Unknown")
+                        concept["label"] = tag.split(":")[-1] if ":" in tag else tag
+                        logger.debug(f"Adding missing label to concept: {tag}")
+
         return CompanyFactsResponse.model_validate(data)
     except Exception as e:
         logger.warning(f"Failed to deserialize CompanyFactsResponse: {e}")
@@ -487,28 +498,59 @@ class EdgarService:
             # Deduplicate facts per period: period_id -> concept -> CompanyFact
             period_facts_dict: Dict[str, Dict[str, CompanyFact]] = {}
 
+            # Comments after tags reflect EOS Energy's latest 10-Q labels
             key_tags = [
-                "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-                "us-gaap:CostOfGoodsAndServicesSold",
-                "us-gaap:GrossProfit",
-                "us-gaap:NetIncomeLoss",
-                "us-gaap:ResearchAndDevelopmentExpense",
-                "us-gaap:SellingGeneralAndAdministrativeExpense",
-                # "us-gaap:ImpairmentOfLongLivedAssetsHeldForUse", # shows up for EOSE butnot used (we'll just have "Other Expenses")
-                "us-gaap:OperatingIncomeLoss",
-                # "us-gaap:InterestExpenseDebt",
-                "us-gaap:InterestExpenseNonoperating",
-                "us-gaap:InterestExpenseRelatedParty",
-                "us-gaap:FairValueAdjustmentOfWarrants",
-                "us-gaap:EmbeddedDerivativeGainLossOnEmbeddedDerivativeNet",
-                "us-gaap:GainsLossesOnExtinguishmentOfDebt",
-                "us-gaap:CostsAndExpenses",
-                "us-gaap:IncomeTaxExpenseBenefit",
-                "us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",
-                "us-gaap:Assets",
-                "us-gaap:Liabilities",
+                # Under "UNAUDITED CONDENSED CONSOLIDATED BALANCE SHEETS"
+                "us-gaap:Assets",  # Total assets
+                "us-gaap:Liabilities",  # Total liabilities
                 "us-gaap:TotalEquity",
-                "us-gaap:DebtInstrumentInterestRateEffectivePercentage",  # StockholdersEquity",
+                # EOSE seems to have stopped using this:
+                # "us-gaap:DebtInstrumentInterestRateEffectivePercentage",  # StockholdersEquity",
+                # Under "UNAUDITED CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS AND COMPREHENSIVE LOSS":
+                "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",  # Revenue
+                "us-gaap:CostOfGoodsAndServicesSold",  # Cost of Goods Sold
+                "us-gaap:GrossProfit",  # Gross Profit
+                "us-gaap:ResearchAndDevelopmentExpense",  # Research and Development Expenses
+                "us-gaap:SellingGeneralAndAdministrativeExpense",  # Selling, General, and Administrative Expenses
+                # shows up for EOSE but perhaps don't use (just have "Other Expenses")
+                "us-gaap:ImpairmentOfLongLivedAssetsHeldForUse",  # Loss from write-down of property, plant and equipment
+                "us-gaap:CostsAndExpenses",  # Total operating expenses
+                "us-gaap:OperatingIncomeLoss",  # Operating Loss
+                # EOSE seems to have used this in 2020 and 2021 but not since then:
+                # "us-gaap:InterestExpenseDebt",
+                # Next 2 tags not found for EOSE. See "Segment Reporting" below.
+                # Interest expense, net
+                # "us-gaap:InterestExpenseRelatedParty", # Interest income (expense) - related party
+                "us-gaap:LiabilitiesFairValueAdjustment",  # Change in fair value of debt - related party
+                "us-gaap:FairValueAdjustmentOfWarrants",  # Change in fair value of warrants
+                "us-gaap:EmbeddedDerivativeGainLossOnEmbeddedDerivativeNet",  # Change in fair value of derivatives - related parties
+                "us-gaap:GainsLossesOnExtinguishmentOfDebt",  # (Loss) gain on debt extinguishment
+                # Other expense
+                # Loss before income taxes
+                "us-gaap:IncomeTaxExpenseBenefit",  # Income tax expense (benefit)
+                "us-gaap:NetIncomeLoss",  # Net Loss attributable to shareholders
+                # Remeasurement of Preferred Stock - related party
+                # Down round deemed dividend
+                # Net Loss attributable to common shareholders
+                # Change in fair value of debt - credit risk - related party
+                # Foreign currency translation adjustment
+                "us-gaap:ComprehensiveIncomeNetOfTax",  # Comprehensive Loss attributable to common shareholders
+                "us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",  # Weighted average shares of common stock Basic
+                # "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding", # Weighted average shares of common stock Diluted
+                # No tag found for these under "UNAUDITED CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS AND COMPREHENSIVE LOSS":
+                # Interest expense, net
+                # "us-gaap:InterestExpenseRelatedParty", # Interest income (expense) - related party
+                # Under "Segment Reporting":
+                "us-gaap:DepreciationAndAmortization",  # Depreciation and Amortization
+                # EOSE shows "Interest expense, net" and "Interest income (expense) - related party" under "UNAUDITED CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS AND COMPREHENSIVE LOSS"
+                # but "Interest income" and "Interest expense" under "Segment Reporting."
+                # These values do not match but match when added together.
+                "us-gaap:InvestmentIncomeInterest",  # Interest income
+                "us-gaap:InterestExpenseNonoperating",  # Interest expense
+                "us-gaap:SegmentExpenditureAdditionToLongLivedAssets",  # Capital Expenditures
+                # No tag found for these under "Segment Reporting":
+                # Product revenue
+                # Service revenue
             ]
 
             for tag in key_tags:
@@ -522,7 +564,11 @@ class EdgarService:
                     continue
 
                 # Get concept metadata from first match
-                label = matched[0].label
+                label = getattr(matched[0], "label", None)
+                # Fallback to tag if label is None or empty
+                if not label:
+                    # Use tag as fallback, removing namespace prefix if present
+                    label = tag.split(":")[-1] if ":" in tag else tag
                 unit = getattr(matched[0], "unit", None) or "us-gaap"
 
                 # Create or get concept
