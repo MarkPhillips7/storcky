@@ -66,7 +66,9 @@ def _get_convex_url() -> Optional[str]:
     return url
 
 
-def _query_convex_facts(ticker: str) -> Tuple[Optional[CompanyFactsResponse], Optional[datetime]]:
+def _query_convex_facts(
+    ticker: str,
+) -> Tuple[Optional[CompanyFactsResponse], Optional[datetime]]:
     """
     Query Convex for cached company facts by ticker.
     Returns a tuple of (CompanyFactsResponse, filing_date) or (None, None) if not found.
@@ -102,13 +104,13 @@ def _query_convex_facts(ticker: str) -> Tuple[Optional[CompanyFactsResponse], Op
                     value = result.get("value")
                     if value is None:
                         return None, None
-                    
+
                     # Extract filing date
                     filing_date_ts = value.get("filingDate")
                     filing_date = None
                     if filing_date_ts:
                         filing_date = datetime.fromtimestamp(filing_date_ts / 1000)
-                    
+
                     # Deserialize the CompanyFactsResponse from the cached data
                     facts_data = value.get("facts")
                     if facts_data:
@@ -288,11 +290,11 @@ def _deserialize_facts_from_json(facts_json: Dict[str, Any]):
 def _generate_period_id(fiscal_period: str, end_date: date) -> str:
     """
     Generate a period ID in the format "Q1 2024" or "FY 2023".
-    
+
     Args:
         fiscal_period: The fiscal period string (Q1, Q2, Q3, Q4, FY, etc.)
         end_date: The period end date
-        
+
     Returns:
         Period ID string (e.g., "Q1 2024", "FY 2023")
     """
@@ -301,33 +303,85 @@ def _generate_period_id(fiscal_period: str, end_date: date) -> str:
     return f"{fp} {year}"
 
 
+def _fact_log_context(
+    f,
+    tag: str,
+    period_id: str,
+    val: Any,
+    accn: Any,
+    filed: Any,
+    fp: str,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Build a loggable dict of fact attributes for dedup debugging."""
+    ctx: Dict[str, Any] = {
+        "concept": tag,
+        "period_id": period_id,
+        "value": str(val) if val is not None else None,
+        "unit": getattr(f, "unit", None),
+        "accession": str(accn) if accn is not None else None,
+        "filing_date": str(filed) if filed is not None else None,
+        "fiscal_period": fp,
+        "period_start": str(start) if start is not None else None,
+        "period_end": str(end) if end is not None else None,
+    }
+    for attr in ("form", "dimensions", "segment", "context_id"):
+        v = getattr(f, attr, None)
+        if v is not None:
+            ctx[attr] = str(v) if not isinstance(v, (dict, list)) else v
+    return ctx
+
+
 def _serialize_company_facts_response(response: CompanyFactsResponse) -> Dict[str, Any]:
     """
     Serialize CompanyFactsResponse to JSON-compatible dictionary.
-    
+
     Args:
         response: The CompanyFactsResponse to serialize
-        
+
     Returns:
         JSON-compatible dictionary
     """
     return response.model_dump(mode="json")
 
 
-def _deserialize_company_facts_response(data: Dict[str, Any]) -> Optional[CompanyFactsResponse]:
+def _deserialize_company_facts_response(
+    data: Dict[str, Any],
+) -> Optional[CompanyFactsResponse]:
     """
     Deserialize JSON dictionary to CompanyFactsResponse.
-    
+
     Args:
         data: JSON dictionary containing CompanyFactsResponse data
-        
+
     Returns:
         CompanyFactsResponse object or None if deserialization fails
     """
     try:
+        # Normalize the data to ensure periods have facts field
+        # This handles cases where data stored in Convex might be missing facts
+        if "periods" in data and isinstance(data["periods"], list):
+            for period in data["periods"]:
+                if isinstance(period, dict) and "facts" not in period:
+                    logger.debug(
+                        f"Adding missing facts field to period: {period.get('id', 'unknown')}"
+                    )
+                    period["facts"] = []
+
         return CompanyFactsResponse.model_validate(data)
     except Exception as e:
         logger.warning(f"Failed to deserialize CompanyFactsResponse: {e}")
+        # Log the problematic data structure for debugging
+        if "periods" in data:
+            logger.debug(
+                f"Periods count: {len(data['periods']) if isinstance(data['periods'], list) else 'not a list'}"
+            )
+            for i, period in enumerate(
+                data.get("periods", [])[:2]
+            ):  # Log first 2 periods
+                if isinstance(period, dict):
+                    logger.debug(f"Period {i} keys: {list(period.keys())}")
         return None
 
 
@@ -393,7 +447,9 @@ class EdgarService:
             cached_response = None
             cached_filing_date = None
             if ticker_for_cache:
-                cached_response, cached_filing_date = _query_convex_facts(ticker_for_cache)
+                cached_response, cached_filing_date = _query_convex_facts(
+                    ticker_for_cache
+                )
 
             # Get company facts (EntityFacts) - use .facts property
             facts = company.facts
@@ -405,13 +461,13 @@ class EdgarService:
 
             # Check if we should use cached data
             should_use_cache = False
-            if cached_response and cached_filing_date and current_filing_date:
-                # Use cache if cached filing date is >= current filing date
-                if cached_filing_date >= current_filing_date:
-                    should_use_cache = True
-                    logger.info(
-                        f"Using cached facts for {ticker_for_cache} (filing date: {cached_filing_date})"
-                    )
+            # if cached_response and cached_filing_date and current_filing_date:
+            #     # Use cache if cached filing date is >= current filing date
+            #     if cached_filing_date >= current_filing_date:
+            #         should_use_cache = True
+            #         logger.info(
+            #             f"Using cached facts for {ticker_for_cache} (filing date: {cached_filing_date})"
+            #         )
 
             # Extract company info
             company_info = CompanyInfo(
@@ -428,22 +484,38 @@ class EdgarService:
             # Build concepts, periods, and facts separately
             concepts_dict: Dict[str, Concept] = {}  # keyed by concept tag
             periods_dict: Dict[str, FactPeriod] = {}  # keyed by period ID
-            facts_list: list[CompanyFact] = []
+            # Deduplicate facts per period: period_id -> concept -> CompanyFact
+            period_facts_dict: Dict[str, Dict[str, CompanyFact]] = {}
 
             key_tags = [
-                "Revenues",
-                "RevenueFromContractWithCustomerExcludingAssessedTax",
-                "NetIncomeLoss",
-                "EarningsPerShareBasic",
-                "EarningsPerShareDiluted",
-                "Assets",
-                "Liabilities",
-                "StockholdersEquity",
+                "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "us-gaap:CostOfGoodsAndServicesSold",
+                "us-gaap:GrossProfit",
+                "us-gaap:NetIncomeLoss",
+                "us-gaap:ResearchAndDevelopmentExpense",
+                "us-gaap:SellingGeneralAndAdministrativeExpense",
+                # "us-gaap:ImpairmentOfLongLivedAssetsHeldForUse", # shows up for EOSE butnot used (we'll just have "Other Expenses")
+                "us-gaap:OperatingIncomeLoss",
+                # "us-gaap:InterestExpenseDebt",
+                "us-gaap:InterestExpenseNonoperating",
+                "us-gaap:InterestExpenseRelatedParty",
+                "us-gaap:FairValueAdjustmentOfWarrants",
+                "us-gaap:EmbeddedDerivativeGainLossOnEmbeddedDerivativeNet",
+                "us-gaap:GainsLossesOnExtinguishmentOfDebt",
+                "us-gaap:CostsAndExpenses",
+                "us-gaap:IncomeTaxExpenseBenefit",
+                "us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",
+                "us-gaap:Assets",
+                "us-gaap:Liabilities",
+                "us-gaap:TotalEquity",
+                "us-gaap:DebtInstrumentInterestRateEffectivePercentage",  # StockholdersEquity",
             ]
 
             for tag in key_tags:
                 query = (
-                    facts.query().by_concept(tag).sort_by("period_end", ascending=False)
+                    facts.query()
+                    .by_concept(tag, True)
+                    .sort_by("period_end", ascending=False)
                 )
                 matched = query.execute()
                 if not matched:
@@ -454,10 +526,8 @@ class EdgarService:
                 unit = getattr(matched[0], "unit", None) or "us-gaap"
 
                 # Create or get concept
-                concept_id = tag
-                if concept_id not in concepts_dict:
-                    concepts_dict[concept_id] = Concept(
-                        id=concept_id,
+                if tag not in concepts_dict:
+                    concepts_dict[tag] = Concept(
                         tag=tag,
                         label=label,
                         unit=unit,
@@ -474,7 +544,13 @@ class EdgarService:
                         fp = (getattr(f, "fiscal_period", "") or "").upper()
                         if period_type == "annual" and fp != "FY":
                             continue
-                        if period_type == "quarterly" and fp not in ("Q1", "Q2", "Q3", "Q4"):
+                        if period_type == "quarterly" and fp not in (
+                            "Q1",
+                            "Q2",
+                            "Q3",
+                            "Q4",
+                            "FY",
+                        ):
                             continue
 
                     val = getattr(f, "numeric_value", None)
@@ -484,6 +560,9 @@ class EdgarService:
                     end_d = getattr(f, "period_end", None)
                     start_d = getattr(f, "period_start", None) or end_d
                     if not end_d:
+                        continue
+
+                    if period_type == "quarterly" and end_d.month - start_d.month > 3:
                         continue
 
                     accn = getattr(f, "accession", None)
@@ -511,28 +590,57 @@ class EdgarService:
                                 period_type=fact_period_type,
                                 accn=str(accn) if accn else None,
                                 filed_at=filed,
+                                facts=[],
                             )
+                            period_facts_dict[period_id] = {}
 
-                        # Create fact linking concept to period
-                        facts_list.append(
-                            CompanyFact(
-                                concept=concept_id,
-                                fact_period=period_id,
-                                value=str(val),
-                            )
-                        )
+                        facts_for_period = period_facts_dict[period_id]
+                        fact = CompanyFact(concept=tag, value=str(val))
+                        # print("f: {f}")
+                        # log_ctx = _fact_log_context(
+                        #     f, tag, period_id, val, accn, filed, fp, start, end
+                        # )
+
+                        if tag in facts_for_period:
+                            existing = facts_for_period[tag]
+                            if existing.value != fact.value:
+                                logger.error(
+                                    "Duplicate CompanyFact for same concept '%s' in period '%s': "
+                                    "stored value '%s' vs new value '%s'",
+                                    tag,
+                                    period_id,
+                                    existing.value,
+                                    fact.value,
+                                )
+                                # logger.info(
+                                #     "CompanyFact skipped (conflict). New fact details: %s",
+                                #     log_ctx,
+                                # )
+                            # else:
+                            # logger.info(
+                            #     "CompanyFact skipped (duplicate, same value): %s",
+                            #     log_ctx,
+                            # )
+                        else:
+                            facts_for_period[tag] = fact
+                            # logger.info(
+                            #     "CompanyFact stored (first occurrence): %s", log_ctx
+                            # )
 
                         period_count += 1
                     except (ValueError, AttributeError, TypeError) as e:
                         logger.debug(f"Error processing fact: {e}")
                         continue
 
+            # Populate each period's facts from deduplicated dict
+            for period_id, period in periods_dict.items():
+                period.facts = list(period_facts_dict.get(period_id, {}).values())
+
             # Build the response
             response = CompanyFactsResponse(
                 company=company_info,
                 concepts=list(concepts_dict.values()),
                 periods=list(periods_dict.values()),
-                facts=facts_list,
             )
 
             # Store response in Convex if we have a ticker and either:
@@ -540,9 +648,7 @@ class EdgarService:
             # 2. Current filing date is more recent than cached
             if ticker_for_cache and current_filing_date and not should_use_cache:
                 # Store the CompanyFactsResponse
-                _store_convex_facts(
-                    ticker_for_cache, response, current_filing_date
-                )
+                _store_convex_facts(ticker_for_cache, response, current_filing_date)
                 logger.info(
                     f"Stored facts in Convex for {ticker_for_cache} (filing date: {current_filing_date})"
                 )

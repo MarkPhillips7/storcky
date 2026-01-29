@@ -5,7 +5,6 @@ export interface CompanyInfo {
 }
 
 export interface Concept {
-  id: string
   tag: string
   label: string
   unit: string | null
@@ -18,11 +17,11 @@ export interface FactPeriod {
   period_type: string
   accn: string | null
   filed_at: string | null // ISO datetime string
+  facts: CompanyFact[]
 }
 
 export interface CompanyFact {
   concept: string
-  fact_period: string
   value: string
 }
 
@@ -30,7 +29,6 @@ export interface CompanyFactsResponse {
   company: CompanyInfo
   concepts: Concept[]
   periods: FactPeriod[]
-  facts: CompanyFact[]
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"

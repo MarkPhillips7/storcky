@@ -35,31 +35,23 @@ function formatValue(value: string, unit: string | null): string {
 }
 
 function getLatestFactForConcept(
-  conceptId: string,
-  facts: CompanyFact[],
+  conceptTag: string,
   periods: FactPeriod[]
 ): { fact: CompanyFact; period: FactPeriod | null } | null {
-  // Find all facts for this concept
-  const conceptFacts = facts.filter((f) => f.concept === conceptId)
-  if (conceptFacts.length === 0) return null
-
   // Sort periods by end_date descending to find the latest
   const sortedPeriods = [...periods].sort((a, b) => 
     new Date(b.end_date).getTime() - new Date(a.end_date).getTime()
   )
 
-  // Find the latest fact by matching with the latest period
+  // Find the latest fact for this concept by checking each period's facts
   for (const period of sortedPeriods) {
-    const fact = conceptFacts.find((f) => f.fact_period === period.id)
+    const fact = period.facts.find((f) => f.concept === conceptTag)
     if (fact) {
       return { fact, period }
     }
   }
 
-  // Fallback: return the first fact with its period
-  const firstFact = conceptFacts[0]
-  const period = periods.find((p) => p.id === firstFact.fact_period) || null
-  return { fact: firstFact, period }
+  return null
 }
 
 export default async function StockPage({ params }: PageProps) {
@@ -91,7 +83,7 @@ export default async function StockPage({ params }: PageProps) {
     )
   }
 
-  const { company, concepts, periods, facts } = companyFacts
+  const { company, concepts, periods } = companyFacts
 
   // Get the latest period for display
   const latestPeriod = periods.length > 0
@@ -114,7 +106,7 @@ export default async function StockPage({ params }: PageProps) {
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {concepts.map((concept) => {
-          const latestFactData = getLatestFactForConcept(concept.id, facts, periods)
+          const latestFactData = getLatestFactForConcept(concept.tag, periods)
           
           if (!latestFactData) {
             return null
@@ -124,7 +116,7 @@ export default async function StockPage({ params }: PageProps) {
           const formattedValue = formatValue(fact.value, concept.unit)
 
           return (
-            <Card key={concept.id}>
+            <Card key={concept.tag}>
               <CardHeader>
                 <CardTitle>{concept.label}</CardTitle>
                 <CardDescription>
