@@ -292,7 +292,7 @@ def _generate_period_id(fiscal_period: str, end_date: date) -> str:
     Generate a period ID in the format "Q1 2024" or "FY 2023".
 
     Args:
-        fiscal_period: The fiscal period string (Q1, Q2, Q3, Q4, FY, etc.)
+        fiscal_period: The fiscal period string (Q1, Q2, Q3, FY, etc.)
         end_date: The period end date
 
     Returns:
@@ -301,6 +301,33 @@ def _generate_period_id(fiscal_period: str, end_date: date) -> str:
     fp = fiscal_period.upper().strip() if fiscal_period else "UNKNOWN"
     year = end_date.year
     return f"{fp} {year}"
+
+
+def _generate_previous_period_id(period_type: str, period_id: str) -> str:
+    """
+    Return the previous period ID given the current one.
+
+    Args:
+        period_type: "quarterly" or "annual"
+        period_id: Current period ID (e.g., "Q3 2025", "FY 2024")
+
+    Returns:
+        Previous period ID (e.g., "Q2 2025", "FY 2023")
+    """
+    parts = period_id.strip().split()
+    if len(parts) != 2:
+        return period_id
+    fp, year_str = parts[0].upper(), parts[1]
+    try:
+        year = int(year_str)
+    except ValueError:
+        return period_id
+    if period_type == "annual":
+        return f"FY {year - 1}"
+    # quarterly: Q1 -> FY prev year, Q2 -> Q1, Q3 -> Q2, FY -> Q3
+    quarter_map = {"Q1": ("FY", -1), "Q2": ("Q1", 0), "Q3": ("Q2", 0), "FY": ("Q3", 0)}
+    prev_fp, year_delta = quarter_map.get(fp, ("Q1", 0))
+    return f"{prev_fp} {year + year_delta}"
 
 
 def _fact_log_context(
@@ -497,6 +524,11 @@ class EdgarService:
             periods_dict: Dict[str, FactPeriod] = {}  # keyed by period ID
             # Deduplicate facts per period: period_id -> concept -> CompanyFact
             period_facts_dict: Dict[str, Dict[str, CompanyFact]] = {}
+            # Valid periods are only relevant when limit is defined and are determined after identifying the most recent period.
+            # If period_type is quarterly and first period is "Q3 2025" and limit is 5, then valid periods are "Q3 2025", "Q2 2025", "Q1 2025", "FY 2024", "Q3 2024".
+            # If period_type is annual and first period is "FY 2025" and limit is 5, then valid periods are "FY 2025", "FY 2024", "FY 2023", "FY 2022", "FY 2021".
+            # This is necessary because some concepts do not have values for all periods and we don't want to store values for invalid periods.
+            valid_periods: List[str] = []
 
             # Comments after tags reflect EOS Energy's latest 10-Q labels
             key_tags = [
@@ -594,7 +626,6 @@ class EdgarService:
                             "Q1",
                             "Q2",
                             "Q3",
-                            "Q4",
                             "FY",
                         ):
                             continue
@@ -626,6 +657,18 @@ class EdgarService:
 
                         # Generate period ID
                         period_id = _generate_period_id(fp, end)
+                        if limit and len(valid_periods) < limit:
+                            # Determine and populate all valid periods
+                            valid_periods.append(period_id)
+                            period_id_iterator = period_id
+                            for i in range(limit - len(valid_periods)):
+                                period_id_iterator = _generate_previous_period_id(
+                                    fact_period_type, period_id_iterator
+                                )
+                                valid_periods.append(period_id_iterator)
+
+                        if limit and period_id not in valid_periods:
+                            continue
 
                         # Create or get period
                         if period_id not in periods_dict:
