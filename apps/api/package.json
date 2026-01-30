@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test": "bash -c 'source venv/bin/activate && python -m pytest -v'",
     "setup": "./setup.sh",
     "install": "./install_deps.sh",
     "dev": "bash -c 'source venv/bin/activate && uvicorn app.main:app --reload --port 8000'",
