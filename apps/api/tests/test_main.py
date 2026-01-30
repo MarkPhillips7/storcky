@@ -11,37 +11,37 @@ from app.models.schemas import (
 )
 
 
-def test_root(client):
+async def test_root(client):
     """Root endpoint returns 200 and expected message."""
-    response = client.get("/")
+    response = await client.get("/")
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "Storcky API"
     assert data["version"] == "0.1.0"
 
 
-def test_health(client):
+async def test_health(client):
     """Health endpoint returns 200 and healthy status."""
-    response = client.get("/health")
+    response = await client.get("/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
 
 
 @patch("app.routes.financial.EdgarService.get_company_facts")
-def test_financial_route_404_on_unknown_ticker(mock_get_facts, client):
+async def test_financial_route_404_on_unknown_ticker(mock_get_facts, client):
     """Financial route returns 404 when company not found."""
     from app.services.edgar import CompanyNotFoundError
 
     mock_get_facts.side_effect = CompanyNotFoundError("Company XYZ not found")
 
-    response = client.get("/api/financial/UNKNOWNTICKER")
+    response = await client.get("/api/financial/UNKNOWNTICKER")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
 
 @patch("app.routes.financial.EdgarService.get_company_facts")
-def test_financial_route_returns_data(mock_get_facts, client):
+async def test_financial_route_returns_data(mock_get_facts, client):
     """Financial route returns company facts when found."""
     mock_response = CompanyFactsResponse(
         company=CompanyInfo(name="Test Co", cik="0001234567", ticker="TEST"),
@@ -60,7 +60,7 @@ def test_financial_route_returns_data(mock_get_facts, client):
     )
     mock_get_facts.return_value = mock_response
 
-    response = client.get("/api/financial/TEST")
+    response = await client.get("/api/financial/TEST")
     assert response.status_code == 200
     data = response.json()
     assert data["company"]["ticker"] == "TEST"
