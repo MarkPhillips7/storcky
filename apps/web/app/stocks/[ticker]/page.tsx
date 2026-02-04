@@ -1,6 +1,5 @@
-import { notFound } from "next/navigation"
-import { fetchFinancialData, CompanyFactsResponse, Concept, CompanyFact, FactPeriod } from "@/lib/api"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { CompanyFact, CompanyFactsResponse, Concept, FactPeriod, fetchFinancialData } from '@/lib/api';
 
 interface PageProps {
   params: {
@@ -86,7 +85,7 @@ export default async function StockPage({ params }: PageProps) {
   const { company, concepts, periods } = companyFacts
 
   // Get the latest period for display
-  const latestPeriod = periods.length > 0
+  const latestPeriod = periods && periods.length > 0
     ? [...periods].sort((a, b) => 
         new Date(b.end_date).getTime() - new Date(a.end_date).getTime()
       )[0]
