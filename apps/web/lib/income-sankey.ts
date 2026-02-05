@@ -1,5 +1,5 @@
 import { CompanyFactsResponse } from './api';
-import { SankeyGraph } from 'd3-sankey-diagram';
+import { SankeyGraph, SankeyLink, SankeyNode } from 'd3-sankey-diagram';
 
 type IncomeSankeyNode = {
   /** Unique income sankey node id. */  
@@ -18,7 +18,9 @@ type IncomeSankeyNode = {
    * If provided with a value, the node will be included in the graph and the value will be extracted from the CompanyFact data.
    * If the node has multiple tags, the value will be the sum of the values extracted from the CompanyFact data.
    * If a tag has an action, the value will be altered appropriately (added or subtracted). */
-  tags?: IncomeSankeyNodeTag[]
+  tags: IncomeSankeyNodeTag[]
+  /** Whether to use the prior period value for the node. */
+  usePriorPeriod?: boolean
 }
 
 type IncomeSankeyNodeTag = string | {
@@ -43,7 +45,7 @@ type IncomeSankeyTemplate = {
   links: IncomeSankeyLink[]
 }
 
-const incomeSankeyTemplate: IncomeSankeyTemplate = {
+const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
     nodes: [
       {
         id: "revenue",
@@ -57,6 +59,8 @@ const incomeSankeyTemplate: IncomeSankeyTemplate = {
         order: 2,
         title: "Bank Account",
         color: "grey",
+        tags: ["us-gaap:CashAndCashEquivalentsAtCarryingValue"],
+        usePriorPeriod: true,
       },
       {
         id: "cost-of-goods-sold",
@@ -242,15 +246,124 @@ const incomeSankeyTemplate: IncomeSankeyTemplate = {
     ],
   };
 
-export const getIncomeSankey = (companyFactsResponse: CompanyFactsResponse, periodId: string, incomeSankeyOverride?: IncomeSankeyTemplate): SankeyGraph => {
+const linkKey = (link: IncomeSankeyLink) => `${link.source}|${link.target}`
+
+/**
+ * Merges two income sankey templates.
+ * Nodes matched by id will be overridden by the override template.
+ * Links matched by source and target will be overridden by the override template.
+ * The nodes and links will be sorted by order.
+ * @param defaultTemplate - The default income sankey template.
+ * @param overrideTemplate - The override income sankey template.
+ * @returns The merged income sankey template.
+ */
+const mergeIncomeSankeyTemplates = (
+  defaultTemplate: IncomeSankeyTemplate,
+  overrideTemplate?: IncomeSankeyTemplate,
+): IncomeSankeyTemplate => {
+  if (!overrideTemplate) {
+    return {
+      nodes: [...defaultTemplate.nodes].sort((a, b) => a.order - b.order),
+      links: [...defaultTemplate.links].sort((a, b) => a.order - b.order),
+    }
+  }
+
+  const nodeMap = new Map<string, IncomeSankeyNode>()
+  for (const node of defaultTemplate.nodes) {
+    nodeMap.set(node.id, { ...node })
+  }
+  for (const node of overrideTemplate.nodes) {
+    const existing = nodeMap.get(node.id)
+    nodeMap.set(node.id, existing ? { ...existing, ...node } : { ...node })
+  }
+  const nodes = Array.from(nodeMap.values()).sort((a, b) => a.order - b.order)
+
+  const linkMap = new Map<string, IncomeSankeyLink>()
+  for (const link of defaultTemplate.links) {
+    linkMap.set(linkKey(link), { ...link })
+  }
+  for (const link of overrideTemplate.links) {
+    const key = linkKey(link)
+    const existing = linkMap.get(key)
+    linkMap.set(key, existing ? { ...existing, ...link } : { ...link })
+  }
+  const links = Array.from(linkMap.values()).sort((a, b) => a.order - b.order)
+
+  return { nodes, links }
+}
+
+const getNodeValue = (node: IncomeSankeyNode | undefined, valuesByConcept: Record<string, number>) => {
+    if (!node) {
+        return 0
+    }
+    const rawValue =node.tags?.reduce((acc, tag) => {
+        if (typeof tag === "string") {
+            return acc + valuesByConcept[tag] || 0
+        } else {
+            return acc + (tag.action === "add" ? valuesByConcept[tag.tag] : -valuesByConcept[tag.tag] || 0)
+        }
+    }, 0) || 0
+    return Math.abs(rawValue)
+}
+
+const adjustConceptValues = (tags: IncomeSankeyNodeTag[], value: number, valuesByConcept: Record<string, number>) => {
+    if (!tags) {
+        return
+    }
+    tags.forEach((t) => {
+        if (typeof t === "string") {
+            valuesByConcept[t] -= value
+        } else {
+            t.action === "add" ? valuesByConcept[t.tag] -= value : valuesByConcept[t.tag] += value
+        }
+    })
+}
+
+const getNodeTitle = (node: IncomeSankeyNode, companyFactsResponse: CompanyFactsResponse) => {
+    if (node.title) {
+        return node.title
+    }
+    const { concepts } = companyFactsResponse
+    for (const tag of node.tags) {
+        if (typeof tag === "string") {
+            const concept = concepts.find((c) => c.tag === tag)
+            if (concept) {
+                return concept.label
+            }
+        }
+    }
+    return node.id
+}
+
+export const getIncomeSankey = (companyFactsResponse: CompanyFactsResponse, periodId: string, incomeSankeyTemplateOverride?: IncomeSankeyTemplate): SankeyGraph => {
     const { periods } = companyFactsResponse
     const period = periods.find((p) => p.id === periodId)
     if (!period) {
         throw new Error(`Period ${periodId} not found`)
     }
+    const incomeSankeyTemplate = mergeIncomeSankeyTemplates(defaultIncomeSankeyTemplate, incomeSankeyTemplateOverride)
     const { facts } = period
-    const sankeyJson: SankeyGraph = {
-        nodes: facts.map((f) => ({ id: f.concept, name: f.concept })),
-    }
-    return sankeyJson
+    const valuesByConcept: Record<string, number> = facts.reduce((acc: Record<string, number>, fact) => {
+        acc[fact.concept] = Number.parseFloat(fact.value)
+        return acc
+    }, {})
+    const incomeSankeyNodes: IncomeSankeyNode[] = incomeSankeyTemplate.nodes
+    .filter((n) => getNodeValue(n, valuesByConcept) !== 0)
+    const nodes: SankeyNode[] = incomeSankeyNodes.map((n) => ({ id: n.id, title: getNodeTitle(n, companyFactsResponse), color: n.color }))
+    const filteredLinks: IncomeSankeyLink[] = incomeSankeyTemplate.links.filter((l) => {
+        return nodes.some((n) => n.id === l.source) && nodes.some((n) => n.id === l.target)
+    })
+    const links: SankeyLink[] = filteredLinks.map((l) => {
+        const sourceNode = incomeSankeyNodes.find((n) => n.id === l.source)
+        const targetNode = incomeSankeyNodes.find((n) => n.id === l.target)
+        const sourceValue = getNodeValue(sourceNode, valuesByConcept)
+        const targetValue = getNodeValue(targetNode, valuesByConcept)
+        const value = Math.min(sourceValue, targetValue)
+        if (value !== 0) {
+            adjustConceptValues(sourceNode?.tags || [], value, valuesByConcept)
+        }
+
+        return ({ source: l.source, target: l.target, value: value, color: "black" })
+    })
+    return { nodes, links }
 }

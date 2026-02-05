@@ -1,5 +1,7 @@
+import IncomeSankey from '@/components/ui/income-sankey';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { CompanyFact, CompanyFactsResponse, Concept, FactPeriod, fetchFinancialData } from '@/lib/api';
+import { getIncomeSankey } from '@/lib/income-sankey';
 
 interface PageProps {
   params: {
@@ -91,6 +93,8 @@ export default async function StockPage({ params }: PageProps) {
       )[0]
     : null
 
+  const incomeSankey = latestPeriod ? getIncomeSankey(companyFacts, latestPeriod.id) : null
+
   return (
     <div className="container mx-auto p-8">
       <h1 className="text-4xl font-bold mb-2">{company.name || tickerUpper}</h1>
@@ -103,6 +107,7 @@ export default async function StockPage({ params }: PageProps) {
         </p>
       )}
 
+      {incomeSankey && <IncomeSankey sankeyJson={incomeSankey} />}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {concepts.map((concept) => {
           const latestFactData = getLatestFactForConcept(concept.tag, periods)

@@ -1,26 +1,74 @@
+'use client';
+
 import * as d3 from 'd3';
 import type { CSSProperties, SVGAttributes } from 'react';
-import { gsap } from 'gsap';
-import { sankey, sankeyDiagram } from 'd3-sankey-diagram';
-import { useEffect, useRef } from 'react';
+import { sankey, sankeyDiagram, SankeyGraph } from 'd3-sankey-diagram';
+import { useEffect, useState } from 'react';
 
 type IncomeSankeyProps = {
-    sankeyJson: any;
+    sankeyJson: SankeyGraph;
 }
+
+type SankeyLinkRender = {
+  id: number;
+  pathD: string;
+  fill: string;
+  title: string;
+  textX?: string | null;
+  textY?: string | null;
+  textDy?: string | null;
+  textContent: string;
+};
+
+type SankeyNodeRender = {
+  id: number;
+  transform: string;
+  title: string;
+  line: {
+    x1?: string | null;
+    x2?: string | null;
+    y1?: string | null;
+    y2?: string | null;
+    style?: CSSProperties;
+  };
+  rect: {
+    width?: string | null;
+    height?: string | null;
+    color?: string | null;
+  };
+  valueText: {
+    dy?: string | null;
+    textAnchor?: SVGAttributes<SVGTextElement>['textAnchor'];
+    transform?: string | null;
+    style?: CSSProperties;
+    textContent: string;
+  };
+  titleText: {
+    dy?: string | null;
+    textAnchor?: SVGAttributes<SVGTextElement>['textAnchor'];
+    transform?: string | null;
+    style?: CSSProperties;
+    textContent: string;
+  };
+  clickRect: {
+    x?: string | null;
+    y?: string | null;
+    width?: string | null;
+    height?: string | null;
+    style?: CSSProperties;
+  };
+};
+
 export default function IncomeSankey({ sankeyJson }: IncomeSankeyProps) {
-//   const svgRef = useRef<SVGSVGElement>(null);
-//   const containerRef = useRef<HTMLDivElement>(null);
-  const width = 800;
-  const height = 600;
+  const [sankeyLinksForReact, setSankeyLinksForReact] = useState<SankeyLinkRender[]>([]);
+  const [sankeyNodesForReact, setSankeyNodesForReact] = useState<SankeyNodeRender[]>([]);
+
+  const width = 1000;
+  const height = 800;
   const layout = sankey().nodeWidth(10).extent([
     [20, 20],
     [width - 40, height - 40],
   ]);
-//   const layoutShadow = sankey().extent([
-//     [30, 30],
-//     [width - 30, height - 30],
-//   ]);
-  // layout.ordering()
 
   const colorScale = d3
     .scaleOrdinal<string, string>()
@@ -28,15 +76,20 @@ export default function IncomeSankey({ sankeyJson }: IncomeSankeyProps) {
     .range(["#FF6B6B", "#4ECDC4", "#45B7D1"]);
 
   const diagram = sankeyDiagram()
-  .linkColor((d) => colorScale(d.type || ""));
+    .linkColor((d) => colorScale(d.type || ""));
 
-  // Create a new SVG that is not in the dom at all using d3
-  const svg2 = d3.select(
-    document.createElementNS("http://www.w3.org/2000/svg", "svg"),
-  );
-  svg2.datum(layout(sankeyJson)).call(diagram as any);
-  const links = svg2.selectAll("g.link"); //.groups.links.link");
-  const nodes = svg2.selectAll("g.node");
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const svg2 = d3.select(
+      document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+    );
+    svg2.datum(layout(sankeyJson)).call(diagram as any);
+    const links = svg2.selectAll("g.link");
+    const nodes = svg2.selectAll("g.node");
+    setSankeyLinksForReact(getSankeyLinksForReact(links, colorScale));
+    setSankeyNodesForReact(getSankeyNodesForReact(nodes));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- layout, diagram, colorScale are stable
+  }, [sankeyJson]);
 
   const parseStyle = (
     styleString?: string | null,
@@ -71,42 +124,35 @@ export default function IncomeSankey({ sankeyJson }: IncomeSankeyProps) {
       : undefined;
   };
 
-  type SankeyLinkRender = {
-    id: number;
-    pathD: string;
-    fill: string;
-    title: string;
-    textX?: string | null;
-    textY?: string | null;
-    textDy?: string | null;
-    textContent: string;
-  };
-
-  const getSankeyLinksForReact = (links: d3.Selection<d3.BaseType, unknown, SVGSVGElement, unknown>) => {
+  const getSankeyLinksForReact = (
+    links: d3.Selection<d3.BaseType, unknown, SVGSVGElement, unknown>,
+    scale: d3.ScaleOrdinal<string, string>,
+  ) => {
     return links
-    .nodes()
-    .map((node, index) => {
-      const group = node as SVGGElement & { __data__?: { type?: string } };
-      const path = group.querySelector("path");
-      const title = group.querySelector("title");
-      const text = group.querySelector("text");
-      const data = group.__data__;
-      const fillColor = colorScale(data?.type || "");
+      .nodes()
+      .map((node, index) => {
+        const group = node as SVGGElement & { __data__?: { type?: string } };
+        const path = group.querySelector("path");
+        const title = group.querySelector("title");
+        const text = group.querySelector("text");
+        const data = group.__data__;
+        const fillColor = scale(data?.type || "");
 
-      return {
-        id: index,
-        pathD: path?.getAttribute("d") ?? "",
-        fill: fillColor,
-        title: title?.textContent ?? "",
-        textX: text?.getAttribute("x"),
-        textY: text?.getAttribute("y"),
-        textDy: text?.getAttribute("dy"),
-        textContent: text?.textContent ?? "",
-      };
-    });
-  }
-  const sankeyLinksForReact: SankeyLinkRender[] = getSankeyLinksForReact(links);
-  const getSankeyNodesForReact = (nodes: d3.Selection<d3.BaseType, unknown, SVGSVGElement, unknown>) => {
+        return {
+          id: index,
+          pathD: path?.getAttribute("d") ?? "",
+          fill: fillColor,
+          title: title?.textContent ?? "",
+          textX: text?.getAttribute("x"),
+          textY: text?.getAttribute("y"),
+          textDy: text?.getAttribute("dy"),
+          textContent: text?.textContent ?? "",
+        };
+      });
+  };
+  const getSankeyNodesForReact = (
+    nodes: d3.Selection<d3.BaseType, unknown, SVGSVGElement, unknown>,
+  ) => {
     return nodes
     .nodes()
     .map((node, index) => {
@@ -164,48 +210,7 @@ export default function IncomeSankey({ sankeyJson }: IncomeSankeyProps) {
     });
   };
 
-  const sankeyNodesForReact: SankeyNodeRender[] = getSankeyNodesForReact(nodes);
-
-  type SankeyNodeRender = {
-    id: number;
-    transform: string;
-    title: string;
-    line: {
-      x1?: string | null;
-      x2?: string | null;
-      y1?: string | null;
-      y2?: string | null;
-      style?: CSSProperties;
-    };
-    rect: {
-      width?: string | null;
-      height?: string | null;
-      color?: string | null;
-    };
-    valueText: {
-      dy?: string | null;
-      textAnchor?: SVGAttributes<SVGTextElement>['textAnchor'];
-      transform?: string | null;
-      style?: CSSProperties;
-      textContent: string;
-    };
-    titleText: {
-      dy?: string | null;
-      textAnchor?: SVGAttributes<SVGTextElement>['textAnchor'];
-      transform?: string | null;
-      style?: CSSProperties;
-      textContent: string;
-    };
-    clickRect: {
-      x?: string | null;
-      y?: string | null;
-      width?: string | null;
-      height?: string | null;
-      style?: CSSProperties;
-    };
-  };
-
-//   // D3 + GSAP combo example
+  // D3 + GSAP combo example
 //   useEffect(() => {
 //     if (!svgRef.current) return;
 
@@ -281,7 +286,7 @@ export default function IncomeSankey({ sankeyJson }: IncomeSankeyProps) {
 
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-6 sm:px-10 lg:px-16 font-sans">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold text-gray-900 mb-8 text-center md:text-left">
           D3 + GSAP Playground (with Tailwind CSS)
         </h1>
@@ -301,7 +306,7 @@ export default function IncomeSankey({ sankeyJson }: IncomeSankeyProps) {
           <svg
             // ref={svgRef}
             width="100%"
-            height="600"
+            height="800"
             className="border border-gray-300 rounded-lg shadow-sm bg-white"
             style={{ display: "block", maxWidth: "100%" }}
           >

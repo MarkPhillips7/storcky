@@ -533,6 +533,7 @@ class EdgarService:
             # Comments after tags reflect EOS Energy's latest 10-Q labels
             key_tags = [
                 # Under "UNAUDITED CONDENSED CONSOLIDATED BALANCE SHEETS"
+                "us-gaap:CashAndCashEquivalentsAtCarryingValue",  # Cash and cash equivalents
                 "us-gaap:Assets",  # Total assets
                 "us-gaap:Liabilities",  # Total liabilities
                 "us-gaap:TotalEquity",
