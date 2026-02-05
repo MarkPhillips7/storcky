@@ -1,4 +1,4 @@
-import { CompanyFactsResponse } from './api';
+import { CompanyFactsResponse, FactPeriod } from './api';
 import { SankeyGraph, SankeyLink, SankeyNode } from 'd3-sankey-diagram';
 
 type IncomeSankeyNode = {
@@ -292,15 +292,20 @@ const mergeIncomeSankeyTemplates = (
   return { nodes, links }
 }
 
-const getNodeValue = (node: IncomeSankeyNode | undefined, valuesByConcept: Record<string, number>) => {
+const getNodeValue = (
+    node: IncomeSankeyNode | undefined,
+    valuesByConcept: Record<string, number>,
+    valuesByConceptPrior?: Record<string, number>,
+) => {
     if (!node) {
         return 0
     }
-    const rawValue =node.tags?.reduce((acc, tag) => {
+    const values = node.usePriorPeriod && valuesByConceptPrior ? valuesByConceptPrior : valuesByConcept
+    const rawValue = node.tags?.reduce((acc, tag) => {
         if (typeof tag === "string") {
-            return acc + valuesByConcept[tag] || 0
+            return acc + values[tag] || 0
         } else {
-            return acc + (tag.action === "add" ? valuesByConcept[tag.tag] : -valuesByConcept[tag.tag] || 0)
+            return acc + (tag.action === "add" ? values[tag.tag] : -values[tag.tag] || 0)
         }
     }, 0) || 0
     return Math.abs(rawValue)
@@ -335,20 +340,34 @@ const getNodeTitle = (node: IncomeSankeyNode, companyFactsResponse: CompanyFacts
     return node.id
 }
 
+/** Returns the period immediately before the given period when periods are ordered by end_date descending. */
+const getPriorPeriod = (periods: FactPeriod[], periodId: string): FactPeriod | null => {
+    const sorted = [...periods].sort((a, b) => new Date(b.end_date).getTime() - new Date(a.end_date).getTime())
+    const idx = sorted.findIndex((p) => p.id === periodId)
+    return idx >= 0 && idx < sorted.length - 1 ? sorted[idx + 1] : null
+}
+
 export const getIncomeSankey = (companyFactsResponse: CompanyFactsResponse, periodId: string, incomeSankeyTemplateOverride?: IncomeSankeyTemplate): SankeyGraph => {
     const { periods } = companyFactsResponse
     const period = periods.find((p) => p.id === periodId)
     if (!period) {
         throw new Error(`Period ${periodId} not found`)
     }
+    const priorPeriod = getPriorPeriod(periods, periodId)
     const incomeSankeyTemplate = mergeIncomeSankeyTemplates(defaultIncomeSankeyTemplate, incomeSankeyTemplateOverride)
     const { facts } = period
     const valuesByConcept: Record<string, number> = facts.reduce((acc: Record<string, number>, fact) => {
         acc[fact.concept] = Number.parseFloat(fact.value)
         return acc
     }, {})
+    const valuesByConceptPrior: Record<string, number> | undefined = priorPeriod
+        ? priorPeriod.facts.reduce((acc: Record<string, number>, fact) => {
+            acc[fact.concept] = Number.parseFloat(fact.value)
+            return acc
+          }, {} as Record<string, number>)
+        : undefined
     const incomeSankeyNodes: IncomeSankeyNode[] = incomeSankeyTemplate.nodes
-    .filter((n) => getNodeValue(n, valuesByConcept) !== 0)
+    .filter((n) => getNodeValue(n, valuesByConcept, valuesByConceptPrior) !== 0)
     const nodes: SankeyNode[] = incomeSankeyNodes.map((n) => ({ id: n.id, title: getNodeTitle(n, companyFactsResponse), color: n.color }))
     const filteredLinks: IncomeSankeyLink[] = incomeSankeyTemplate.links.filter((l) => {
         return nodes.some((n) => n.id === l.source) && nodes.some((n) => n.id === l.target)
@@ -356,11 +375,12 @@ export const getIncomeSankey = (companyFactsResponse: CompanyFactsResponse, peri
     const links: SankeyLink[] = filteredLinks.map((l) => {
         const sourceNode = incomeSankeyNodes.find((n) => n.id === l.source)
         const targetNode = incomeSankeyNodes.find((n) => n.id === l.target)
-        const sourceValue = getNodeValue(sourceNode, valuesByConcept)
-        const targetValue = getNodeValue(targetNode, valuesByConcept)
+        const sourceValue = getNodeValue(sourceNode, valuesByConcept, valuesByConceptPrior)
+        const targetValue = getNodeValue(targetNode, valuesByConcept, valuesByConceptPrior)
         const value = Math.min(sourceValue, targetValue)
-        if (value !== 0) {
-            adjustConceptValues(sourceNode?.tags || [], value, valuesByConcept)
+        if (value !== 0 && sourceNode) {
+            const valuesToAdjust = sourceNode.usePriorPeriod && valuesByConceptPrior ? valuesByConceptPrior : valuesByConcept
+            adjustConceptValues(sourceNode.tags || [], value, valuesToAdjust)
         }
 
         return ({ source: l.source, target: l.target, value: value, color: "black" })
