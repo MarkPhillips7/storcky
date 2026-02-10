@@ -47,6 +47,8 @@ type IncomeSankeyLink = {
    * the primary source. That way bank-account will only be a source if revenue is less than cost-of-goods-sold.
    */
   order: number;
+  /** Optional condition for the link. If the condition is met, the link will be included in the graph. */
+  condition?: { type: "positive" | "negative"; concept: string };
 };
 
 type IncomeSankeyTemplate = {
@@ -198,15 +200,18 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       source: "bank-account",
       target: "gross-profit",
       order: 4,
-    },
-    {
-      source: "gross-profit",
-      target: "operating-profit",
-      order: 5,
+      condition: { type: "negative", concept: "gross-profit" },
     },
     {
       source: "gross-profit",
       target: "operating-expenses",
+      condition: { type: "positive", concept: "gross-profit" },
+      order: 5,
+    },
+    {
+      source: "gross-profit",
+      target: "operating-profit",
+      condition: { type: "positive", concept: "gross-profit" },
       order: 6,
     },
     {
@@ -228,6 +233,13 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       source: "operating-expenses",
       target: "impairment-of-long-lived-assets",
       order: 10,
+      condition: { type: "positive", concept: "operating-expenses" },
+    },
+    {
+      source: "operating-expenses",
+      target: "operating-profit",
+      order: 10.5,
+      condition: { type: "negative", concept: "operating-expenses" },
     },
     {
       source: "operating-profit",
@@ -237,7 +249,13 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
     {
       source: "operating-profit",
       target: "interest",
+      condition: { type: "positive", concept: "operating-profit" },
       order: 12,
+    },
+    {
+      source: "bank-account",
+      target: "interest",
+      order: 13,
     },
     {
       source: "operating-profit",
@@ -478,40 +496,59 @@ export const getIncomeSankey = (
       );
     }
   );
-  const links: SankeyLink[] = filteredLinks.map((l) => {
-    const sourceNode = incomeSankeyNodes.find((n) => n.id === l.source);
-    const targetNode = incomeSankeyNodes.find((n) => n.id === l.target);
-    const sourceValue = getAbsoluteNodeValue(
-      sourceNode,
-      valuesByConcept,
-      valuesByConceptPrior
-    );
-    const targetValue = getAbsoluteNodeValue(
-      targetNode,
-      valuesByConcept,
-      valuesByConceptPrior
-    );
-    const value = Math.min(sourceValue, targetValue);
-    if (value !== 0) {
-      if (sourceNode)
-        adjustConceptValues(
-          sourceNode.conceptTags || [],
-          value,
-          sourceNode.usePriorPeriod && valuesByConceptPrior
-            ? valuesByConceptPrior
-            : valuesByConcept
-        );
-      if (targetNode)
-        adjustConceptValues(
-          targetNode.conceptTags || [],
-          value,
-          targetNode.usePriorPeriod && valuesByConceptPrior
-            ? valuesByConceptPrior
-            : valuesByConcept
-        );
-    }
+  const links: SankeyLink[] = filteredLinks
+    .map((l) => {
+      const sourceNode = incomeSankeyNodes.find((n) => n.id === l.source);
+      const targetNode = incomeSankeyNodes.find((n) => n.id === l.target);
+      const sourceValue = getNodeValue(
+        sourceNode,
+        valuesByConcept,
+        valuesByConceptPrior
+      );
+      const absSourceValue = Math.abs(sourceValue);
+      const targetValue = getAbsoluteNodeValue(
+        targetNode,
+        valuesByConcept,
+        valuesByConceptPrior
+      );
+      const conditionValue = getNodeValue(
+        incomeSankeyNodes.find((n) => n.id === l.condition?.concept),
+        valuesByConcept,
+        valuesByConceptPrior
+      );
+      if (l.condition?.type === "positive" && conditionValue <= 0) {
+        return null;
+      }
+      if (l.condition?.type === "negative" && conditionValue > 0) {
+        return null;
+      }
+      const value = Math.min(absSourceValue, targetValue);
+      if (value !== 0) {
+        if (sourceNode)
+          adjustConceptValues(
+            sourceNode.conceptTags || [],
+            value,
+            sourceNode.usePriorPeriod && valuesByConceptPrior
+              ? valuesByConceptPrior
+              : valuesByConcept
+          );
+        if (targetNode)
+          adjustConceptValues(
+            targetNode.conceptTags || [],
+            value,
+            targetNode.usePriorPeriod && valuesByConceptPrior
+              ? valuesByConceptPrior
+              : valuesByConcept
+          );
+      }
 
-    return { source: l.source, target: l.target, value: value, color: "black" };
-  });
+      return {
+        source: l.source,
+        target: l.target,
+        value: value,
+        color: "black",
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
   return { nodes, links };
 };
