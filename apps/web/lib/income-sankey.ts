@@ -13,14 +13,19 @@ type IncomeSankeyNode = {
   titleWhenNegative?: string;
   /** Optional color for the node. */
   color?: string;
+  /** Optional color for the node when the value is negative. */
+  colorWhenNegative?: string;
   /** Optional icon for the node. */
   icon?: string;
+  /** Optional icon for the node when the value is negative. */
+  iconWhenNegative?: string;
   /** Concept tags identifying which company facts to extract values from.
    * If not provided or with no value, the node will not be included in the graph.
    * If provided with a value, the node will be included in the graph and the value will be extracted from the CompanyFact data.
    * If the node has multiple tags, the value will be the sum of the values extracted from the CompanyFact data.
    * If a tag has an action, the value will be altered appropriately (added or subtracted). */
   conceptTags: IncomeSankeyNodeTag[];
+  tags?: string[];
   /** Whether to use the prior period value for the node. */
   usePriorPeriod?: boolean;
 };
@@ -72,7 +77,9 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       id: "gross-profit",
       order: 3,
       title: "Gross Profit",
+      titleWhenNegative: "Gross Loss",
       color: "green",
+      colorWhenNegative: "red",
       conceptTags: ["us-gaap:GrossProfit"],
     },
     {
@@ -92,16 +99,22 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
     {
       id: "operating-profit",
       order: 5,
-      title: "Operating Profit (EBIT)",
+      title: "Operating Profit",
+      titleWhenNegative: "Operating Loss",
       color: "green",
+      colorWhenNegative: "red",
       conceptTags: ["us-gaap:OperatingIncomeLoss"],
+      tags: ["EBIT"],
     },
     {
       id: "net-profit",
       order: 6,
-      title: "Net Profit (EAT)",
+      title: "Net Profit",
+      titleWhenNegative: "Net Loss",
       color: "green",
+      colorWhenNegative: "red",
       conceptTags: ["us-gaap:NetIncomeLoss"],
+      tags: ["EAT"],
     },
     {
       id: "operating-expenses",
@@ -225,11 +238,6 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       source: "operating-profit",
       target: "interest",
       order: 12,
-    },
-    {
-      source: "bank-account",
-      target: "interest",
-      order: 13,
     },
     {
       source: "operating-profit",
@@ -369,8 +377,13 @@ const adjustConceptValues = (
 
 const getNodeTitle = (
   node: IncomeSankeyNode,
-  companyFactsResponse: CompanyFactsResponse
-) => {
+  companyFactsResponse: CompanyFactsResponse,
+  value?: number
+): string => {
+  const useWhenNegative = value !== undefined && value < 0;
+  if (useWhenNegative && node.titleWhenNegative) {
+    return node.titleWhenNegative;
+  }
   if (node.title) {
     return node.title;
   }
@@ -385,6 +398,14 @@ const getNodeTitle = (
   }
   return node.id;
 };
+
+const getNodeColor = (
+  node: IncomeSankeyNode,
+  value: number
+): string | undefined =>
+  value < 0 && node.colorWhenNegative !== undefined
+    ? node.colorWhenNegative
+    : node.color;
 
 /** Returns the period immediately before the given period when periods are ordered by end_date descending. */
 const getPriorPeriod = (
@@ -439,13 +460,16 @@ export const getIncomeSankey = (
   for (const n of incomeSankeyNodes) {
     nodeValues[n.id] = getNodeValue(n, valuesByConcept, valuesByConceptPrior);
   }
-  const nodes: SankeyNode[] = incomeSankeyNodes.map((n) => ({
-    id: n.id,
-    title: getNodeTitle(n, companyFactsResponse),
-    color: n.color,
-    value: nodeValues[n.id],
-    valueLabel: formatNodeValueLabel(nodeValues[n.id]),
-  }));
+  const nodes: SankeyNode[] = incomeSankeyNodes.map((n) => {
+    const value = nodeValues[n.id];
+    return {
+      id: n.id,
+      title: getNodeTitle(n, companyFactsResponse, value),
+      color: getNodeColor(n, value),
+      value,
+      valueLabel: formatNodeValueLabel(value),
+    };
+  });
   const filteredLinks: IncomeSankeyLink[] = incomeSankeyTemplate.links.filter(
     (l) => {
       return (

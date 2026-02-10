@@ -72,13 +72,14 @@ export default function IncomeSankey({
     SankeyNodeRender[]
   >([]);
 
-  const width = 1000;
+  const WIDTH_FOR_LABELS = 80;
+  const width = 1152; // max-w-6xl corresponds to 1152px
   const height = 800;
   const layout = sankey()
     .nodeWidth(10)
     .extent([
-      [20, 20],
-      [width - 40, height - 40],
+      [WIDTH_FOR_LABELS, 20],
+      [width - WIDTH_FOR_LABELS, height - 20],
     ]);
 
   const colorScale = d3
