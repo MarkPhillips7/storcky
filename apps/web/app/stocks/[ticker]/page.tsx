@@ -107,7 +107,16 @@ export default async function StockPage({ params }: PageProps) {
         </p>
       )}
 
-      {incomeSankey && <IncomeSankey sankeyJson={incomeSankey} />}
+      {incomeSankey && (
+        <IncomeSankey
+          sankeyJson={incomeSankey}
+          nodeValueLabels={Object.fromEntries(
+            incomeSankey.nodes
+              .filter((n): n is typeof n & { valueLabel: string } => n.valueLabel != null && n.valueLabel !== '')
+              .map((n) => [n.id, n.valueLabel]),
+          )}
+        />
+      )}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {concepts.map((concept) => {
           const latestFactData = getLatestFactForConcept(concept.tag, periods)

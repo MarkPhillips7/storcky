@@ -8,6 +8,10 @@ declare module "d3-sankey-diagram" {
       dy?: number;
       direction?: string;
       color?: string;
+      /** Signed numeric value for the node (used for layout). */
+      value?: number;
+      /** Formatted label for the node value (e.g. US dollar currency, negatives in parentheses). */
+      valueLabel?: string;
       // Add other properties as needed
     }
   
