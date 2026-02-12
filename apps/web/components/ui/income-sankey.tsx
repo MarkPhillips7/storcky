@@ -78,13 +78,17 @@ export default function IncomeSankey({
   const layout = sankey()
     .nodeWidth(10)
     .extent([
-      [WIDTH_FOR_LABELS, 20],
-      [width - WIDTH_FOR_LABELS, height - 20],
+      [WIDTH_FOR_LABELS, 5],
+      [width - WIDTH_FOR_LABELS, height - 5],
     ]);
 
   const colorScale = d3
     .scaleOrdinal<string, string>()
-    .domain(["x", "y", "z"])
+    .domain([
+      "research-and-development",
+      "selling-general-and-administrative",
+      "impairment-of-long-lived-assets",
+    ])
     .range(["#FF6B6B", "#4ECDC4", "#45B7D1"]);
 
   const diagram = sankeyDiagram().linkColor((d) => colorScale(d.type || ""));
@@ -300,9 +304,6 @@ export default function IncomeSankey({
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-6 sm:px-10 lg:px-16 font-sans">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-900 mb-8 text-center md:text-left">
-          D3 + GSAP Playground (with Tailwind CSS)
-        </h1>
         {/* SVG container with border and rounded corners */}
         {/* 
         <div className="flex justify-center w-full">
