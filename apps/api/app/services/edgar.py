@@ -548,6 +548,7 @@ class EdgarService:
                 # shows up for EOSE but perhaps don't use (just have "Other Expenses")
                 "us-gaap:ImpairmentOfLongLivedAssetsHeldForUse",  # Loss from write-down of property, plant and equipment
                 "us-gaap:CostsAndExpenses",  # Total operating expenses
+                "us-gaap:OperatingExpenses",  # ? not used by EOSE but maybe useful for other companies
                 "us-gaap:OperatingIncomeLoss",  # Operating Loss
                 # EOSE seems to have used this in 2020 and 2021 but not since then:
                 # "us-gaap:InterestExpenseDebt",

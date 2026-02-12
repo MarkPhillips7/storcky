@@ -28,6 +28,8 @@ type IncomeSankeyNode = {
   tags?: string[];
   /** Whether to use the prior period value for the node. */
   usePriorPeriod?: boolean;
+  /** Optional value source for the node. */
+  valueSource?: "unlimited" | "reported";
 };
 
 type IncomeSankeyNodeTag =
@@ -76,6 +78,7 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       color: "grey",
       conceptTags: ["us-gaap:CashAndCashEquivalentsAtCarryingValue"],
       usePriorPeriod: true,
+      valueSource: "unlimited",
     },
     {
       id: "gross-profit",
@@ -125,7 +128,7 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       order: 7,
       title: "Operating Expenses",
       color: "red",
-      conceptTags: ["us-gaap:CostsAndExpenses"],
+      conceptTags: ["us-gaap:CostsAndExpenses", "us-gaap:OperatingExpenses"],
     },
     // Operating expense components can be visible nodes if there is an operating profit, otherwise they are part of the operating expenses node.
     // Since they can always be designated by type in the link, they are not visible for now. But they are still needed to access concept values.
@@ -324,17 +327,12 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       order: 10.5,
       condition: { type: "negative", concept: "operating-profit" },
     },
-    {
-      source: "operating-profit",
-      target: "operating-expenses",
-      condition: { type: "positive", concept: "operating-profit" },
-      order: 11,
-    },
-    {
-      source: "operating-profit",
-      target: "net-profit",
-      order: 11.5,
-    },
+    // {
+    //   source: "operating-profit",
+    //   target: "operating-expenses",
+    //   condition: { type: "positive", concept: "operating-profit" },
+    //   order: 11,
+    // },
     {
       source: "operating-profit",
       target: "interest",
@@ -370,6 +368,12 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       target: "net-profit",
       condition: { type: "negative", concept: "operating-profit" },
       order: 12,
+    },
+    {
+      source: "operating-profit",
+      target: "net-profit",
+      order: 16,
+      condition: { type: "positive", concept: "operating-profit" },
     },
     //   {
     //     source: "net-profit",
@@ -736,9 +740,12 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
       if (l.condition?.type === "negative" && conditionValue > 0) {
         return null;
       }
-      const value = Math.min(absSourceValue, absTargetValue);
+      const value =
+        sourceNode?.valueSource === "unlimited"
+          ? absTargetValue
+          : Math.min(absSourceValue, absTargetValue);
       if (value !== 0) {
-        if (sourceNode)
+        if (sourceNode && sourceNode.valueSource !== "unlimited")
           adjustConceptValues(
             sourceConceptTags,
             value,

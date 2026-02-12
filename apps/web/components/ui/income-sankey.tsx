@@ -85,11 +85,12 @@ export default function IncomeSankey({
   const colorScale = d3
     .scaleOrdinal<string, string>()
     .domain([
+      "default",
       "research-and-development",
       "selling-general-and-administrative",
       "impairment-of-long-lived-assets",
     ])
-    .range(["#FF6B6B", "#4ECDC4", "#45B7D1"]);
+    .range(["#FF6B6B77", "#4ECDC477", "#45B7D177", "#77777777"]);
 
   const diagram = sankeyDiagram().linkColor((d) => colorScale(d.type || ""));
 
