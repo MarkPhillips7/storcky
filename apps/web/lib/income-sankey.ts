@@ -690,7 +690,7 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
   const filteredLinks: IncomeSankeyLink[] = incomeSankeyTemplate.links.filter(
     (l) => {
       return (
-        nodes.some((n) => n.id === l.source) &&
+        nodes.some((n) => (l.type ? n.id === l.type : n.id === l.source)) &&
         nodes.some((n) => n.id === l.target)
       );
     }
