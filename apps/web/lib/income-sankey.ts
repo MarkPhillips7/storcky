@@ -39,6 +39,8 @@ type IncomeSankeyNodeTag =
       action?: "add" | "subtract";
     };
 
+type LinkCondition = { type: "positive" | "negative"; concept: string };
+
 type IncomeSankeyLink = {
   /** Source income sankey node id. */
   source: string;
@@ -49,10 +51,10 @@ type IncomeSankeyLink = {
    * the primary source. That way bank-account will only be a source if revenue is less than cost-of-goods-sold.
    */
   order: number;
-  /** Optional condition for the link. If the condition is met, the link will be included in the graph. */
-  condition?: { type: "positive" | "negative"; concept: string };
-  /** Optional type for the link. Types can have different fill patterns. */
-  type?: string;
+  /** Optional conditions for the link. If the conditions are all met, the link will be included in the graph. */
+  conditions?: LinkCondition[];
+  /** Optional target type for the link. Target types can have different fill patterns. */
+  targetType?: string;
 };
 
 type IncomeSankeyTemplate = {
@@ -171,6 +173,7 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       order: 12,
       title: "Tax",
       color: "red",
+      colorWhenNegative: "green",
       conceptTags: ["us-gaap:IncomeTaxExpenseBenefit"],
     },
     //   {
@@ -199,7 +202,7 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
     {
       source: "bank-account",
       target: "cost-of-goods-sold",
-      condition: { type: "negative", concept: "gross-profit" },
+      conditions: [{ type: "negative", concept: "gross-profit" }],
       order: 2,
     },
     {
@@ -211,61 +214,61 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       source: "cost-of-goods-sold",
       target: "gross-profit",
       order: 4,
-      condition: { type: "negative", concept: "gross-profit" },
+      conditions: [{ type: "negative", concept: "gross-profit" }],
     },
     {
       source: "gross-profit",
       target: "operating-expenses",
-      type: "research-and-development",
-      condition: { type: "positive", concept: "gross-profit" },
+      targetType: "research-and-development",
+      conditions: [{ type: "positive", concept: "gross-profit" }],
       order: 5,
     },
     {
       source: "gross-profit",
       target: "operating-expenses",
-      type: "selling-general-and-administrative",
-      condition: { type: "positive", concept: "gross-profit" },
+      targetType: "selling-general-and-administrative",
+      conditions: [{ type: "positive", concept: "gross-profit" }],
       order: 5.3,
     },
     {
       source: "gross-profit",
       target: "operating-expenses",
-      type: "impairment-of-long-lived-assets",
-      condition: { type: "positive", concept: "gross-profit" },
+      targetType: "impairment-of-long-lived-assets",
+      conditions: [{ type: "positive", concept: "gross-profit" }],
       order: 5.6,
     },
     {
       source: "gross-profit",
       target: "operating-profit",
-      condition: { type: "positive", concept: "operating-profit" },
+      conditions: [{ type: "positive", concept: "operating-profit" }],
       order: 6,
     },
     {
       source: "gross-profit",
       target: "operating-profit",
-      condition: { type: "negative", concept: "gross-profit" },
+      conditions: [{ type: "negative", concept: "gross-profit" }],
       order: 6,
     },
     {
       source: "bank-account",
       target: "operating-expenses",
-      type: "research-and-development",
+      targetType: "research-and-development",
       order: 8,
-      condition: { type: "negative", concept: "gross-profit" },
+      conditions: [{ type: "negative", concept: "gross-profit" }],
     },
     {
       source: "bank-account",
       target: "operating-expenses",
-      type: "selling-general-and-administrative",
+      targetType: "selling-general-and-administrative",
       order: 8.3,
-      condition: { type: "negative", concept: "gross-profit" },
+      conditions: [{ type: "negative", concept: "gross-profit" }],
     },
     {
       source: "bank-account",
       target: "operating-expenses",
-      type: "impairment-of-long-lived-assets",
+      targetType: "impairment-of-long-lived-assets",
       order: 8.6,
-      condition: { type: "negative", concept: "gross-profit" },
+      conditions: [{ type: "negative", concept: "gross-profit" }],
     },
     // {
     //   source: "bank-account",
@@ -325,7 +328,7 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
       source: "operating-expenses",
       target: "operating-profit",
       order: 10.5,
-      condition: { type: "negative", concept: "operating-profit" },
+      conditions: [{ type: "negative", concept: "operating-profit" }],
     },
     // {
     //   source: "operating-profit",
@@ -336,44 +339,83 @@ const defaultIncomeSankeyTemplate: IncomeSankeyTemplate = {
     {
       source: "operating-profit",
       target: "interest",
-      condition: { type: "positive", concept: "operating-profit" },
+      conditions: [{ type: "positive", concept: "operating-profit" }],
       order: 12,
     },
     {
       source: "interest",
       target: "net-profit",
-      condition: { type: "negative", concept: "operating-profit" },
+      conditions: [{ type: "negative", concept: "operating-profit" }],
       order: 12,
     },
     {
       source: "bank-account",
       target: "interest",
-      condition: { type: "negative", concept: "operating-profit" },
+      conditions: [{ type: "negative", concept: "operating-profit" }],
       order: 13,
     },
     {
       source: "operating-profit",
       target: "tax",
-      condition: { type: "positive", concept: "operating-profit" },
+      conditions: [
+        { type: "positive", concept: "operating-profit" },
+        { type: "positive", concept: "tax" },
+      ],
+      order: 14,
+    },
+    {
+      source: "operating-profit",
+      target: "tax",
+      conditions: [
+        { type: "negative", concept: "operating-profit" },
+        { type: "negative", concept: "tax" },
+      ],
       order: 14,
     },
     {
       source: "bank-account",
       target: "tax",
-      condition: { type: "negative", concept: "operating-profit" },
+      conditions: [
+        { type: "negative", concept: "operating-profit" },
+        { type: "positive", concept: "tax" },
+      ],
       order: 15,
     },
     {
       source: "tax",
       target: "net-profit",
-      condition: { type: "negative", concept: "operating-profit" },
-      order: 12,
+      conditions: [
+        { type: "negative", concept: "operating-profit" },
+        { type: "positive", concept: "tax" },
+      ],
+      order: 17,
+    },
+    {
+      source: "tax",
+      target: "net-profit",
+      conditions: [
+        { type: "positive", concept: "operating-profit" },
+        { type: "negative", concept: "tax" },
+      ],
+      order: 17,
     },
     {
       source: "operating-profit",
       target: "net-profit",
       order: 16,
-      condition: { type: "positive", concept: "operating-profit" },
+      conditions: [
+        { type: "positive", concept: "operating-profit" },
+        { type: "positive", concept: "net-profit" },
+      ],
+    },
+    {
+      source: "operating-profit",
+      target: "net-profit",
+      order: 16,
+      conditions: [
+        { type: "negative", concept: "operating-profit" },
+        { type: "negative", concept: "net-profit" },
+      ],
     },
     //   {
     //     source: "net-profit",
@@ -435,10 +477,14 @@ const mergeIncomeSankeyTemplates = (
 const getConceptTags = (
   incomeSankeyTemplate: IncomeSankeyTemplate,
   node: IncomeSankeyNode | undefined,
-  link: IncomeSankeyLink
+  link: IncomeSankeyLink,
+  sourceOrTarget: "source" | "target"
 ): IncomeSankeyNodeTag[] => {
   const linkNode =
-    link && incomeSankeyTemplate.nodes.find((n) => n.id === link?.type);
+    sourceOrTarget === "target" &&
+    link &&
+    incomeSankeyTemplate.nodes.find((n) => n.id === link?.targetType);
+  link && incomeSankeyTemplate.nodes.find((n) => n.id === link?.targetType);
   if (linkNode) {
     return linkNode.conceptTags || [];
   }
@@ -462,10 +508,13 @@ const getConceptTagsValue = (
   return (
     conceptTags.reduce((acc, tag) => {
       if (typeof tag === "string") {
-        return acc + values[tag] || 0;
+        return acc + (values[tag] || 0);
       } else {
         return (
-          acc + (tag.action === "add" ? values[tag.tag] : -values[tag.tag] || 0)
+          acc +
+          (tag.action === "add"
+            ? values[tag.tag] || 0
+            : -(values[tag.tag] || 0))
         );
       }
     }, 0) || 0
@@ -488,7 +537,7 @@ const getNodeValue = (
       : valuesByConcept;
 
   const linkNode =
-    link && incomeSankeyTemplate.nodes.find((n) => n.id === link?.type);
+    link && incomeSankeyTemplate.nodes.find((n) => n.id === link?.targetType);
   if (linkNode) {
     return getNodeValue(
       incomeSankeyTemplate,
@@ -501,10 +550,13 @@ const getNodeValue = (
   const rawValue =
     node.conceptTags?.reduce((acc, tag) => {
       if (typeof tag === "string") {
-        return acc + values[tag] || 0;
+        return acc + (values[tag] || 0);
       } else {
         return (
-          acc + (tag.action === "add" ? values[tag.tag] : -values[tag.tag] || 0)
+          acc +
+          (tag.action === "add"
+            ? values[tag.tag] || 0
+            : -(values[tag.tag] || 0))
         );
       }
     }, 0) || 0;
@@ -694,8 +746,9 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
   const filteredLinks: IncomeSankeyLink[] = incomeSankeyTemplate.links.filter(
     (l) => {
       return (
-        nodes.some((n) => (l.type ? n.id === l.type : n.id === l.source)) &&
-        nodes.some((n) => n.id === l.target)
+        nodes.some((n) =>
+          l.targetType ? n.id === l.targetType : n.id === l.target
+        ) && nodes.some((n) => n.id === l.source)
       );
     }
   );
@@ -706,7 +759,8 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
       const sourceConceptTags = getConceptTags(
         incomeSankeyTemplate,
         sourceNode,
-        l
+        l,
+        "source"
       );
       const sourceValue = getConceptTagsValue(
         sourceConceptTags,
@@ -718,7 +772,8 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
       const targetConceptTags = getConceptTags(
         incomeSankeyTemplate,
         targetNode,
-        l
+        l,
+        "target"
       );
       const targetValue = getConceptTagsValue(
         targetConceptTags,
@@ -727,17 +782,20 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
         valuesByConceptPriorTarget
       );
       const absTargetValue = Math.abs(targetValue);
-      const conditionValue = getNodeValue(
-        incomeSankeyTemplate,
-        incomeSankeyNodes.find((n) => n.id === l.condition?.concept),
-        undefined,
-        valuesByConceptSource,
-        valuesByConceptPriorSource
-      );
-      if (l.condition?.type === "positive" && conditionValue <= 0) {
-        return null;
-      }
-      if (l.condition?.type === "negative" && conditionValue > 0) {
+      const conditions = l.conditions ?? [];
+      const conditionsMet = conditions.every((cond) => {
+        const conditionValue = getNodeValue(
+          incomeSankeyTemplate,
+          incomeSankeyNodes.find((n) => n.id === cond.concept),
+          undefined,
+          valuesByConceptSource,
+          valuesByConceptPriorSource
+        );
+        if (cond.type === "positive" && conditionValue <= 0) return false;
+        if (cond.type === "negative" && conditionValue > 0) return false;
+        return true;
+      });
+      if (!conditionsMet) {
         return null;
       }
       const value =
@@ -768,7 +826,7 @@ ${value > 0 ? value : "(" + Math.abs(value) + ")"}`,
         target: l.target,
         value: value,
         color: "black",
-        type: l.type,
+        type: l.targetType,
       };
     })
     .filter((x): x is NonNullable<typeof x> => x != null);
